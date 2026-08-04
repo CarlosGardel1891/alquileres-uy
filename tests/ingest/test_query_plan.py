@@ -40,9 +40,28 @@ def test_build_initial_plan_raises_when_contract_has_no_categories():
 
 
 def test_build_initial_plan_raises_when_category_id_is_empty():
-    contract = approved_contract(category_ids={"apartment": ""})
+    contract = approved_contract(category_ids={"apartment": "", "house": "MLU1466"})
     with pytest.raises(ValueError, match="category id for"):
         build_initial_plan(contract)
+
+
+def test_build_initial_plan_rejects_partial_contract_with_only_house():
+    contract = approved_contract(category_ids={"house": "MLU1466"})
+    with pytest.raises(ValueError, match="apartment"):
+        build_initial_plan(contract)
+
+
+def test_build_initial_plan_rejects_partial_contract_with_only_apartment():
+    contract = approved_contract(category_ids={"apartment": "MLU1743"})
+    with pytest.raises(ValueError, match="house"):
+        build_initial_plan(contract)
+
+
+def test_build_initial_plan_returns_two_segments_only_when_both_categories_present():
+    contract = approved_contract(category_ids={"apartment": "MLU1743", "house": "MLU1466"})
+    segments = build_initial_plan(contract)
+    property_types = sorted(segment.property_type for segment in segments)
+    assert property_types == ["apartment", "house"]
 
 
 def test_query_plan_module_has_no_hardcoded_category_constants():

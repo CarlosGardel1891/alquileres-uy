@@ -88,9 +88,38 @@ def test_load_rejects_empty_category_ids(tmp_path: Path) -> None:
 
 
 def test_load_rejects_empty_category_id_value(tmp_path: Path) -> None:
-    approval_path, _ = _write_pair(tmp_path, approval_overrides={"category_ids": {"apartment": ""}})
+    approval_path, _ = _write_pair(
+        tmp_path,
+        approval_overrides={"category_ids": {"apartment": "", "house": "MLU1466"}},
+    )
     with pytest.raises(SourceGateApprovalInvalid, match="empty"):
         load_approved_contract(approval_path)
+
+
+def test_load_rejects_partial_contract_only_house(tmp_path: Path) -> None:
+    approval_path, _ = _write_pair(
+        tmp_path, approval_overrides={"category_ids": {"house": "MLU1466"}}
+    )
+    with pytest.raises(SourceGateApprovalInvalid, match="apartment"):
+        load_approved_contract(approval_path)
+
+
+def test_load_rejects_partial_contract_only_apartment(tmp_path: Path) -> None:
+    approval_path, _ = _write_pair(
+        tmp_path, approval_overrides={"category_ids": {"apartment": "MLU1743"}}
+    )
+    with pytest.raises(SourceGateApprovalInvalid, match="house"):
+        load_approved_contract(approval_path)
+
+
+def test_load_error_message_names_the_missing_categories(tmp_path: Path) -> None:
+    approval_path, _ = _write_pair(
+        tmp_path, approval_overrides={"category_ids": {"garaje": "MLU9999"}}
+    )
+    with pytest.raises(SourceGateApprovalInvalid) as info:
+        load_approved_contract(approval_path)
+    assert "apartment" in str(info.value)
+    assert "house" in str(info.value)
 
 
 def test_load_rejects_missing_coverage_file(tmp_path: Path) -> None:
@@ -153,6 +182,25 @@ def test_write_approval_requires_verified_category_ids(tmp_path: Path) -> None:
         verified_category_ids={},
     )
     with pytest.raises(ValueError, match="verified category"):
+        write_approval(
+            tmp_path,
+            report=report,
+            coverage_path=coverage_path,
+            coverage_sha256=coverage_sha,
+        )
+
+
+def test_write_approval_rejects_report_with_only_one_category(tmp_path: Path) -> None:
+    coverage_path, coverage_sha = atomic_write_json(tmp_path / "coverage.json", {"x": 1})
+    report = SourceGateReport(
+        decision=SourceGateDecision.APPROVED,
+        token_used=False,
+        sample_size=20,
+        essential_coverage={},
+        date_created_coverage=FieldCoverage(20, 20),
+        verified_category_ids={"apartment": "MLU1743"},  # missing house
+    )
+    with pytest.raises(ValueError, match="house"):
         write_approval(
             tmp_path,
             report=report,
