@@ -189,3 +189,39 @@ def test_multiget_partial_failure_is_returned_intact(make_session, sleep_recorde
     codes = [entry["code"] for entry in body]
     assert codes.count(200) == 18
     assert codes.count(404) == 2
+
+
+def test_get_site_categories_hits_expected_path(make_session, sleep_recorder):
+    session = make_session([FakeResponse(status_code=200, json_data=[])])
+    _, sleep_fn = sleep_recorder
+    client = _client(session, sleep_fn)
+
+    client.get_site_categories("MLU")
+
+    assert session.calls[0]["url"].endswith("/sites/MLU/categories")
+
+
+def test_client_without_token_never_sends_authorization_header(make_session, sleep_recorder):
+    session = make_session([FakeResponse(status_code=200, json_data={})])
+    _, sleep_fn = sleep_recorder
+    client = _client(session, sleep_fn)  # config() defaults to access_token=None
+
+    client.search_items("MLU")
+
+    headers = session.calls[0]["headers"]
+    assert "Authorization" not in headers
+
+
+def test_client_with_token_sends_bearer_authorization_header(make_session, sleep_recorder):
+    session = make_session([FakeResponse(status_code=200, json_data={})])
+    _, sleep_fn = sleep_recorder
+    client = _client(
+        session,
+        sleep_fn,
+        config=_config(access_token="topsecret"),
+    )
+
+    client.search_items("MLU")
+
+    headers = session.calls[0]["headers"]
+    assert headers.get("Authorization") == "Bearer topsecret"

@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 import requests
 
+from alquileres_uy.ingest.models import ApprovedSourceContract
+
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "mercadolibre"
 
 
@@ -69,7 +71,7 @@ class FakeSession:
                 "method": method,
                 "url": url,
                 "params": params,
-                "headers": headers,
+                "headers": dict(headers or {}),
                 "timeout": timeout,
             }
         )
@@ -118,3 +120,28 @@ def clock_ticker():
 @pytest.fixture
 def requests_exceptions():
     return requests
+
+
+def approved_contract(
+    *,
+    category_ids: dict[str, str] | None = None,
+    site_id: str = "MLU",
+    source: str = "mercadolibre",
+    report_path: str = "/dev/null/coverage.json",
+    report_sha256: str = "0" * 64,
+) -> ApprovedSourceContract:
+    """Build an in-memory contract for tests that don't care about the file."""
+    if category_ids is None:
+        category_ids = {"apartment": "MLU1743", "house": "MLU1466"}
+    return ApprovedSourceContract(
+        source=source,
+        site_id=site_id,
+        decision="APPROVED",
+        created_at="2026-08-04T17:00:00Z",
+        category_ids=dict(category_ids),
+        available_filters=["OPERATION", "PROPERTY_TYPE", "BEDROOMS", "price"],
+        operation_filter={"mode": "category+attribute"},
+        coverage={},
+        report_path=report_path,
+        report_sha256=report_sha256,
+    )
