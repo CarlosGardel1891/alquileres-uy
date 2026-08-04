@@ -33,7 +33,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-02-15T09:00:00.000Z",
@@ -91,7 +91,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-03-15T09:00:00.000Z",
@@ -149,7 +149,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-04-15T09:00:00.000Z",
@@ -207,7 +207,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-05-15T09:00:00.000Z",
@@ -265,7 +265,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-06-15T09:00:00.000Z",
@@ -323,7 +323,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-01-15T09:00:00.000Z",
@@ -381,7 +381,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-02-15T09:00:00.000Z",
@@ -439,7 +439,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-03-15T09:00:00.000Z",
@@ -497,7 +497,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-04-15T09:00:00.000Z",
@@ -555,7 +555,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-05-15T09:00:00.000Z",
@@ -613,7 +613,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-06-15T09:00:00.000Z",
@@ -671,7 +671,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-01-15T09:00:00.000Z",
@@ -729,7 +729,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-02-15T09:00:00.000Z",
@@ -787,7 +787,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-03-15T09:00:00.000Z",
@@ -845,7 +845,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-04-15T09:00:00.000Z",
@@ -903,7 +903,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-05-15T09:00:00.000Z",
@@ -961,7 +961,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-06-15T09:00:00.000Z",
@@ -1019,7 +1019,7 @@
           "value_name": "1"
         }
       ],
-      "category_id": "MLU1466",
+      "category_id": "MLU_TEST_APARTMENT",
       "condition": "not_specified",
       "currency_id": "USD",
       "date_created": "2026-01-15T09:00:00.000Z",

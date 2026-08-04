@@ -29,17 +29,42 @@ def _load_cli() -> ModuleType:
     return module
 
 
+DEFAULT_CATEGORIES = {"apartment": "MLU_TEST_APARTMENT", "house": "MLU_TEST_HOUSE"}
+ESSENTIAL_FIELDS = (
+    "price",
+    "currency",
+    "location",
+    "property_type",
+    "operation",
+    "bedrooms",
+    "surface",
+)
+
+
 def _write_valid_approval(tmp_path: Path) -> Path:
-    coverage_path, coverage_sha = atomic_write_json(tmp_path / "coverage.json", {"x": 1})
+    coverage = {
+        "decision": "APPROVED",
+        "sample_size": 20,
+        "essential_coverage": {
+            field_name: {"total": 20, "present": 20, "ratio": 1.0}
+            for field_name in ESSENTIAL_FIELDS
+        },
+        "date_created_coverage": {"total": 20, "present": 20, "ratio": 1.0},
+        "verified_category_ids": dict(DEFAULT_CATEGORIES),
+        "available_filters": ["OPERATION"],
+        "operation_detection": "attribute+category",
+        "target_valid_coverage": {"total": 20, "present": 18, "ratio": 0.9},
+    }
+    coverage_path, coverage_sha = atomic_write_json(tmp_path / "coverage.json", coverage)
     approval = {
         "source": "mercadolibre",
         "site_id": "MLU",
         "decision": "APPROVED",
         "created_at": "2026-08-04T17:00:00Z",
-        "category_ids": {"apartment": "MLU1743", "house": "MLU1466"},
-        "available_filters": [],
-        "operation_filter": {},
-        "essential_coverage": {},
+        "category_ids": dict(DEFAULT_CATEGORIES),
+        "available_filters": ["OPERATION"],
+        "operation_filter": {"mode": "attribute+category"},
+        "sample_size": 20,
         "source_gate_report_path": coverage_path.name,
         "source_gate_report_sha256": coverage_sha,
     }

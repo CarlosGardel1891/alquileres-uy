@@ -132,7 +132,7 @@ def approved_contract(
 ) -> ApprovedSourceContract:
     """Build an in-memory contract for tests that don't care about the file."""
     if category_ids is None:
-        category_ids = {"apartment": "MLU1743", "house": "MLU1466"}
+        category_ids = {"apartment": "MLU_TEST_APARTMENT", "house": "MLU_TEST_HOUSE"}
     return ApprovedSourceContract(
         source=source,
         site_id=site_id,
