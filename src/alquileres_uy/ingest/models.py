@@ -31,6 +31,14 @@ class SourceGateDecision(str, Enum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
+# The project's closed scope for MercadoLibre Uruguay: monthly rentals
+# for apartments and houses in Montevideo. A source can only be
+# approved when *both* categories have been verified against the live
+# site tree. This constant is the single source of truth used by the
+# source gate, the approval writer and loader, and the query plan.
+REQUIRED_PROPERTY_TYPES: frozenset[str] = frozenset({"apartment", "house"})
+
+
 @dataclass(frozen=True)
 class QuerySegment:
     """A deterministic partition of the search space.

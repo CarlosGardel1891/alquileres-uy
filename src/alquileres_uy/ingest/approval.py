@@ -30,7 +30,12 @@ from .errors import (
     SourceGateApprovalMissing,
 )
 from .filesystem import atomic_write_json, compute_sha256
-from .models import ApprovedSourceContract, SourceGateDecision, SourceGateReport
+from .models import (
+    REQUIRED_PROPERTY_TYPES,
+    ApprovedSourceContract,
+    SourceGateDecision,
+    SourceGateReport,
+)
 
 APPROVAL_FILENAME = "source_gate_approval.json"
 EXPECTED_SOURCE = "mercadolibre"
@@ -74,6 +79,12 @@ def load_approved_contract(path: Path) -> ApprovedSourceContract:
         if not isinstance(category_id, str) or not category_id.strip():
             raise SourceGateApprovalInvalid(f"approval category id for {property_type!r} is empty")
         validated_categories[str(property_type)] = category_id.strip()
+
+    missing = sorted(REQUIRED_PROPERTY_TYPES - validated_categories.keys())
+    if missing:
+        raise SourceGateApprovalInvalid(
+            f"approval is missing required categories: {', '.join(missing)}"
+        )
 
     report_name = data.get("source_gate_report_path")
     expected_hash = data.get("source_gate_report_sha256")
@@ -126,6 +137,11 @@ def write_approval(
         raise ValueError("write_approval must only be called for APPROVED source gate decisions")
     if not report.verified_category_ids:
         raise ValueError("cannot write approval without verified category ids")
+    missing = sorted(REQUIRED_PROPERTY_TYPES - report.verified_category_ids.keys())
+    if missing:
+        raise ValueError(
+            "cannot write approval: missing required property categories: " f"{', '.join(missing)}"
+        )
 
     payload: dict[str, Any] = {
         "source": EXPECTED_SOURCE,
