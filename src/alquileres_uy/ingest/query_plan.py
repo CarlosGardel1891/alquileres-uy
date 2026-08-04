@@ -1,11 +1,10 @@
 """Deterministic query plan for MercadoLibre searches.
 
 The plan expresses the segmentation of the search space into slices that
-individually fit under MercadoLibre's ``offset + limit <= 1000`` cap. The
-initial plan targets apartments and houses for monthly rent in
-Montevideo. Segments whose reported total exceeds
-:data:`SAFE_SEGMENT_LIMIT` are split by price bands, and if needed by
-bedroom count.
+individually fit under MercadoLibre's ``offset + limit <= 1000`` cap. It
+depends entirely on the :class:`ApprovedSourceContract` produced by the
+source gate, so the pipeline never uses category IDs that have not been
+verified against a real API response.
 
 The plan itself is deterministic and network-free; probing reported
 totals is the ingestion service's responsibility.
@@ -18,13 +17,7 @@ import json
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 
-from .models import QuerySegment
-
-# Category identifiers observed for MercadoLibre Uruguay real estate.
-# These are seeds; the source gate re-verifies them against the live
-# category tree and records the observed values in the source contract.
-CATEGORY_APARTMENT = "MLU1466"
-CATEGORY_HOUSE = "MLU1472"
+from .models import ApprovedSourceContract, QuerySegment
 
 DEFAULT_STATE_LABEL = "Montevideo"
 
@@ -43,23 +36,25 @@ DEFAULT_BEDROOM_BUCKETS: tuple[int | None, ...] = (1, 2, 3, 4, None)
 
 
 def build_initial_plan(
-    site_id: str = "MLU",
+    contract: ApprovedSourceContract,
     state: str = DEFAULT_STATE_LABEL,
 ) -> list[QuerySegment]:
     """Return the seed list of query segments for a new run.
 
-    The seed distinguishes property type and rent operation. Splitting by
-    price or bedrooms is done later, once the service knows the reported
-    total for each segment.
+    The seed is built from ``contract.category_ids``. If the mapping is
+    empty the pipeline cannot proceed, so a :class:`ValueError` is
+    raised — callers must never construct a plan against unverified
+    categories.
     """
+    if not contract.category_ids:
+        raise ValueError("cannot build query plan: approved contract has no verified categories")
     segments: list[QuerySegment] = []
-    for property_type, category in (
-        ("apartment", CATEGORY_APARTMENT),
-        ("house", CATEGORY_HOUSE),
-    ):
+    for property_type, category_id in sorted(contract.category_ids.items()):
+        if not category_id:
+            raise ValueError(f"cannot build query plan: category id for {property_type} is empty")
         parameters = {
-            "site_id": site_id,
-            "category": category,
+            "site_id": contract.site_id,
+            "category": category_id,
             "state": state,
             "operation": "rent",
         }
@@ -67,7 +62,7 @@ def build_initial_plan(
             QuerySegment(
                 segment_key=f"{property_type}|{state}|rent",
                 parameters=parameters,
-                category_id=category,
+                category_id=category_id,
                 property_type=property_type,
                 operation="rent",
                 location=state,
@@ -80,12 +75,7 @@ def split_by_price(
     segment: QuerySegment,
     boundaries: Sequence[int] = DEFAULT_PRICE_BOUNDARIES,
 ) -> list[QuerySegment]:
-    """Split ``segment`` into contiguous, non-overlapping price bands.
-
-    Bands are ``[low, high)`` and never leave gaps. Assumes MercadoLibre's
-    ``price=low-high`` filter syntax; the last band uses only the lower
-    bound to catch any premium listings above the last boundary.
-    """
+    """Split ``segment`` into contiguous, non-overlapping price bands."""
     ordered = sorted(set(boundaries))
     if len(ordered) < 2:
         raise ValueError("need at least two boundaries to build price bands")
@@ -105,7 +95,6 @@ def split_by_price(
                 price_max=float(high),
             )
         )
-    # Trailing open-ended band to avoid dropping listings above the top boundary.
     tail_low = ordered[-1]
     tail_params = dict(segment.parameters)
     tail_params["price"] = f"{tail_low}-*"
@@ -158,11 +147,28 @@ def plan_hash(segments: Iterable[QuerySegment]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def classify_candidate(item: dict[str, object]) -> tuple[str, str | None]:
+def page_fingerprint(item_ids: Iterable[str]) -> str:
+    """Return the deterministic SHA-256 fingerprint of a page's IDs.
+
+    Two pages that surface the same set of IDs (regardless of intra-page
+    ordering) produce the same fingerprint. Used to detect a search
+    endpoint that keeps returning the same page for different offsets.
+    """
+    ordered = sorted(item_ids)
+    payload = json.dumps(ordered, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def classify_candidate(
+    item: dict[str, object],
+    contract: ApprovedSourceContract,
+) -> tuple[str, str | None]:
     """Return a preliminary ``(candidate_status, reason)`` for a raw item.
 
-    Only structured fields are inspected; textual descriptions are ignored
-    by design. Deep classification is deferred to the ETL phase.
+    The property-type check consults ``contract.category_ids`` — only
+    values that the source gate actually verified against MercadoLibre
+    are treated as valid. If the item lacks both a matching category and
+    a structured ``PROPERTY_TYPE`` attribute, it is marked ``unknown``.
     """
     category_id = item.get("category_id")
     location = item.get("address") or item.get("location") or {}
@@ -191,7 +197,10 @@ def classify_candidate(item: dict[str, object]) -> tuple[str, str | None]:
     if "montevideo" not in state.lower():
         return ("excluded", "outside_montevideo")
 
-    if category_id not in {CATEGORY_APARTMENT, CATEGORY_HOUSE} and property_type is None:
+    approved_category_ids = set(contract.category_ids.values())
+    matches_category = category_id in approved_category_ids
+    has_property_type_attribute = bool(property_type)
+    if not matches_category and not has_property_type_attribute:
         return ("unknown", "wrong_property_type")
 
     return ("candidate", None)

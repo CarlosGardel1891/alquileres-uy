@@ -1,5 +1,10 @@
 """CLI entrypoint that runs the MercadoLibre source gate.
 
+The gate is always driven by an anonymous client. A separate
+authenticated client is only constructed when ``MELI_ACCESS_TOKEN`` is
+set — never sharing a session with the anonymous one, so the anonymous
+probe cannot leak an ``Authorization`` header.
+
 Exit codes:
     0 = APPROVED
     1 = unexpected error
@@ -51,32 +56,41 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    config = IngestionConfig(
+    base_config = IngestionConfig(
         output_dir=args.output_dir,
         database_path=args.database_path,
         requests_per_second=args.requests_per_second,
         request_timeout_seconds=args.timeout,
         max_attempts=args.max_attempts,
-        access_token=load_access_token(),
     )
 
+    token = load_access_token()
+    anonymous_client = MercadoLibreClient(base_config.with_overrides(access_token=None))
+    authenticated_client = None
+    if token:
+        authenticated_client = MercadoLibreClient(base_config.with_overrides(access_token=token))
+
     timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ")
-    workdir = config.output_dir / "source_gate" / f"{timestamp}_{uuid.uuid4().hex[:8]}"
+    workdir = base_config.output_dir / "source_gate" / f"{timestamp}_{uuid.uuid4().hex[:8]}"
 
     try:
-        client = MercadoLibreClient(config)
-        report, artifacts = run_source_gate(config, client, workdir)
+        report, artifacts = run_source_gate(
+            config=base_config,
+            anonymous_client=anonymous_client,
+            authenticated_client=authenticated_client,
+            workdir=workdir,
+        )
     except Exception:
         logging.exception("source gate crashed")
         return 1
 
     print(json.dumps(report.as_dict(), indent=2, ensure_ascii=False))
     logging.info(
-        "source gate finished: decision=%s workdir=%s",
+        "source gate finished: decision=%s workdir=%s approval=%s",
         report.decision.value,
         workdir,
+        artifacts.approval,
     )
-    _ = artifacts
     return DECISION_EXIT_CODES.get(report.decision, 1)
 
 

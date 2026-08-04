@@ -55,3 +55,15 @@ class MaxRetriesExceeded(IngestionError):
 
 class SourceGateInconclusive(IngestionError):
     """Raised when the source gate cannot reach a decision."""
+
+
+class SourceGateApprovalMissing(IngestionError):
+    """Raised when the ingestion is started without a gate approval file."""
+
+
+class SourceGateApprovalInvalid(IngestionError):
+    """Raised when the approval file exists but is malformed or not APPROVED."""
+
+
+class SourceGateApprovalIntegrityError(IngestionError):
+    """Raised when the coverage.json SHA-256 does not match the approval."""
