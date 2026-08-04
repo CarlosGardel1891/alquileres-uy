@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0.0",
+  "essential_min_hits": 16,
+  "sample_size": 20,
+  "target_min_hits": 16,
+  "duplicate_area_bucket_m2": 5,
+  "duplicate_price_bucket_usd": 50,
+  "canonical_columns_reference": "src/alquileres_uy/etl/models.py::CANONICAL_COLUMN_ORDER"
+}

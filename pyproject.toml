@@ -17,6 +17,11 @@ dependencies = []
 ingest = [
     "requests==2.32.3"
 ]
+etl = [
+    "pandas==2.2.3",
+    "pyarrow==18.1.0",
+    "pandera==0.22.1"
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
