@@ -57,14 +57,18 @@ def test_parse_number_comma_decimal():
     assert value == Decimal("65.5")
 
 
-def test_parse_number_with_unit_m2():
-    value, err = parse_number("65 m2")
+def test_parse_area_with_unit_m2():
+    from alquileres_uy.etl.extractors import parse_area
+
+    value, err = parse_area("65 m2")
     assert err is None
     assert value == Decimal("65")
 
 
-def test_parse_number_with_unit_m_squared():
-    value, err = parse_number("65 m²")
+def test_parse_area_with_unit_m_squared():
+    from alquileres_uy.etl.extractors import parse_area
+
+    value, err = parse_area("65 m²")
     assert err is None
     assert value == Decimal("65")
 
