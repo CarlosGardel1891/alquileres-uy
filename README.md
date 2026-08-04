@@ -178,15 +178,23 @@ La ingesta es idempotente respecto a `item_id`. Correr dos veces con el mismo pl
 
 GitHub Actions **no** ejecuta la ingesta ni el source gate. Sólo instala dependencias y corre tests con fixtures locales (`ruff`, `pytest`, `pre-commit`, `build`).
 
+### Requisitos del source gate
+
+- El gate sólo puede devolver `APPROVED` si **ambas** categorías del alcance cerrado (`apartment` y `house`) se verificaron contra el árbol vivo del sitio (`/sites/{site_id}/categories`). Un contrato parcial (sólo casas o sólo apartamentos) fuerza `INCONCLUSIVE` y no crea `source_gate_approval.json`. Esto se valida en el gate, en el writer del approval, en el loader del approval y en el query plan.
+- Cada probe de búsqueda deja evidencia sanitizada bajo `search_no_auth.json` y — sólo si realmente se ejecutó — `search_with_auth.json`. El formato es `{"request": {method, endpoint, authenticated}, "response": {status_code, body|error_type|message}}`. Se guarda tanto para respuestas `200` como para `401`, `403`, timeouts y demás fallos de red. `status_code` puede ser `null` cuando no hubo respuesta HTTP.
+- `token_used` significa "se envió un bearer token en al menos una llamada". Se marca `true` en el momento en que el pipeline **decide** ejecutar la llamada autenticada — aun si esa llamada termina en `403` o timeout. No es un flag de éxito.
+- Tokens y headers de autorización se redactan en todos los artefactos, tanto por clave sensible (`authorization`, `access_token`, `token`, `cookie`, `x-auth-token`, case-insensitive) como por reemplazo literal del valor conocido del token cuando se pasa a `sanitize_for_artifact`.
+
 ### Resultado del source gate (2026-08-04)
 
 - **Decisión:** `INCONCLUSIVE` (exit code `3`).
-- **Token usado:** no.
+- **Token usado:** no (no hay `MELI_ACCESS_TOKEN`, así que el gate ni siquiera intenta la llamada autenticada).
 - **Motivo:** MercadoLibre respondió `403 forbidden` (con `blocked_by: PolicyAgent`) a `GET /sites/MLU/search` y otros endpoints del sitio sin token. El endpoint puntual `/categories/{id}` sí responde `200`, lo que confirma que sólo los recursos del sitio están cerrados anónimamente.
-- **Categorías verificadas:** **ninguna**. La constante hardcodeada anterior (`MLU1466` como "Apartamentos") era incorrecta — el endpoint real la devuelve como "Casas". El proyecto **no** tiene todavía IDs de categoría validados contra el árbol de sitio y, por diseño, se niega a asumir uno.
-- **Consecuencia:** la ingesta masiva **no** se ejecutó y no puede ejecutarse. El script `run_ingestion.py` requiere un `source_gate_approval.json` con hash del reporte de cobertura; hoy ese artefacto no existe.
+- **Categorías verificadas:** **ninguna** — sin el árbol del sitio (`/sites/MLU/categories`) accesible, el gate no puede confirmar los IDs de `apartment` ni `house`. La constante hardcodeada anterior (`MLU1466` como "Apartamentos") era incorrecta: el endpoint real la devuelve como "Casas".
+- **Evidencia local:** `data/raw/mercadolibre/source_gate/<timestamp>_<id>/coverage.json` y `search_no_auth.json` (wrapper con `{request, response: {status_code: 403, body: {...}}}`, sin tokens).
+- **Consecuencia:** la ingesta masiva **no** se ejecutó y no puede ejecutarse. El script `run_ingestion.py` requiere un `source_gate_approval.json` con hash del reporte de cobertura **y** las dos categorías verificadas; hoy ese artefacto no existe.
 - **Próximos pasos posibles:** obtener token oficial de MercadoLibre, priorizar otra fuente, o alcance reducido con `/categories`.
-- **Evidencia detallada:** `docs/mercadolibre-source-contract.md`.
+- **Detalle:** `docs/mercadolibre-source-contract.md`.
 
 ## Fases del proyecto
 

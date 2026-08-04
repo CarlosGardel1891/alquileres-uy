@@ -164,6 +164,76 @@ Motivación:
 - Sin este check, sería posible ejecutar la ingesta con categorías incorrectas hardcodeadas (`MLU1466` era "Casas", no "Apartamentos") y contaminar el dataset silenciosamente.
 - El SHA-256 impide que alguien edite `coverage.json` a posteriori para "aprobar" una corrida que no cumplió los umbrales.
 
+## Categorías obligatorias del contrato
+
+El alcance de la ingesta está cerrado a **dos** categorías de MercadoLibre Uruguay: apartamentos y casas. El proyecto expone esa lista como una única constante compartida:
+
+```python
+REQUIRED_PROPERTY_TYPES = frozenset({"apartment", "house"})
+```
+
+y la usa en cuatro puntos:
+
+1. `source_gate._decide` — sólo devuelve `APPROVED` cuando `verified_category_ids` cubre exactamente esas dos claves;
+2. `approval.write_approval` — se niega a emitir `source_gate_approval.json` con una categoría faltante;
+3. `approval.load_approved_contract` — al cargar el approval, exige `category_ids["apartment"]` y `category_ids["house"]` no vacíos e indica en el mensaje de error cuál falta;
+4. `query_plan.build_initial_plan` — vuelve a validar la precondición porque nada garantiza que el contrato haya venido del loader (por ejemplo en tests).
+
+Motivación:
+
+- La ingesta con una sola categoría produciría un dataset sesgado y silenciosamente incorrecto (por ejemplo, todos "Casas" sin "Apartamentos").
+- Las claves internas son `"apartment"` y `"house"` — nunca `"apartamento"`, `"casas"`, `"apartments"`, etc. Los nombres en español sólo se usan para hacer *matching* contra la metadata de MercadoLibre en `_verify_category_ids`.
+- Que la validación viva en un único lugar (constante compartida) evita que las cuatro capas divergen.
+
+## Evidencia de probes fallidos
+
+Toda llamada de búsqueda del source gate genera un artefacto en disco, tanto en éxito (`200`) como en fallo (`401`, `403`, timeout, etc.). El formato uniforme es:
+
+```json
+{
+  "request": {
+    "method": "GET",
+    "endpoint": "/sites/MLU/search",
+    "authenticated": false
+  },
+  "response": {
+    "status_code": 403,
+    "body": {
+      "message": "forbidden",
+      "error": "forbidden",
+      "status": 403
+    }
+  }
+}
+```
+
+Para errores de red sin respuesta HTTP, `status_code` es `null` y se agregan `error_type` y `message`.
+
+Los archivos son:
+
+- `search_no_auth.json` — siempre.
+- `search_with_auth.json` — sólo si el pipeline **decidió** ejecutar la llamada autenticada (o sea: el anónimo devolvió `401`/`403` **y** hay `authenticated_client`).
+
+Motivación:
+
+- El caso más importante para auditar la fuente es cuando falla. Perder el body del `403` obligaba a re-consultar manualmente MercadoLibre para reconstruir la evidencia.
+- El wrapper `{request, response}` deja explícito qué se pidió y qué respondió, y separa metadatos del request (`authenticated`) del body real, evitando ambigüedad cuando el body está vacío o es un error.
+- Todos los artefactos pasan por `sanitize_for_artifact`, que redacta claves sensibles (`authorization`, `access_token`, `token`, `cookie`, `x-auth-token`, case-insensitive) y — si se conoce el token literal — lo reemplaza en cualquier string, URL o mensaje anidado.
+
+## Semántica de `token_used`
+
+`token_used` responde a "¿se envió un bearer token en al menos una llamada?", no a "¿la llamada autenticada fue exitosa?". Se marca `true` en el momento en que el pipeline decide ejecutar `authenticated_client.search_items(...)`, antes del `try`, así:
+
+- si el anónimo devolvió `200` y no se llegó a llamar al autenticado, `token_used = false` (incluso con `MELI_ACCESS_TOKEN` seteado);
+- si el anónimo devolvió `401`/`403` y el autenticado también, `token_used = true`;
+- si el autenticado terminó en timeout, `token_used = true`;
+- si no hay `authenticated_client`, `token_used = false`.
+
+Motivación:
+
+- Un `token_used = false` cuando el token se envió y falló era engañoso: sugería que el proyecto ni siquiera intentó autenticarse.
+- Con la semántica correcta, el reporte y el `coverage.json` reflejan fielmente el comportamiento del pipeline y permiten diagnosticar "¿la API rechazó al token?" vs "¿no había token disponible?".
+
 ## Primera consulta como fuente de trazabilidad
 
 Cada `run_items.query_id` guarda la **primera** consulta (dentro de esa corrida) que descubrió el `item_id`. Cuando el mismo ID aparece en una consulta posterior:
