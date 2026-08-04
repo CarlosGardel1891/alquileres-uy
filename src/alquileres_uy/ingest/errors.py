@@ -2,19 +2,34 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class IngestionError(Exception):
     """Base exception for all ingestion errors."""
 
 
 class HttpError(IngestionError):
-    """Raised for HTTP responses that were not handled by retries."""
+    """Raised for HTTP responses that were not handled by retries.
 
-    def __init__(self, status_code: int, message: str, url: str | None = None) -> None:
+    ``response_body`` carries the parsed body when the response was JSON,
+    a truncated string when it was not, or ``None`` when it could not be
+    read. It exists so probe artifacts can preserve exactly what
+    MercadoLibre answered without a second HTTP call.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        url: str | None = None,
+        response_body: Any = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.message = message
         self.url = url
+        self.response_body = response_body
 
 
 class ClientHttpError(HttpError):

@@ -6,6 +6,13 @@ regular files on the same volume. A SHA-256 digest of the exact bytes on
 disk is returned so the caller can persist it in the audit log.
 
 Once written, callers must treat the file as immutable.
+
+The :func:`sanitize_for_artifact` helper strips any sensitive value from
+a payload before it is persisted. It redacts a fixed set of case-
+insensitive keys (``authorization``, ``access_token``, ``token``,
+``cookie``, ``x-auth-token``) *and*, when a specific token string is
+passed in, replaces every literal occurrence of that token inside
+strings, URLs and error messages.
 """
 
 from __future__ import annotations
@@ -13,8 +20,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+REDACTED = "***REDACTED***"
+SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {"authorization", "access_token", "token", "cookie", "x-auth-token"}
+)
 
 
 def compute_sha256(payload: bytes) -> str:
@@ -52,6 +65,40 @@ def atomic_write_json(destination: Path, data: Any) -> tuple[Path, str]:
         sort_keys=True,
     ).encode("utf-8")
     return atomic_write_bytes(destination, payload)
+
+
+def sanitize_for_artifact(value: Any, token: str | None = None) -> Any:
+    """Return ``value`` with sensitive keys redacted, recursively.
+
+    - Mapping entries whose *key* (case-insensitive) is in
+      :data:`SENSITIVE_KEYS` have their value replaced by ``"***REDACTED***"``,
+      no matter what the value's type is.
+    - Strings that contain the exact ``token`` (when provided) have every
+      occurrence replaced by ``"***REDACTED***"``. This catches leaks in
+      URLs, query strings, error messages and free-form text.
+    - Lists and tuples are sanitized element by element.
+    - Non-container values are returned unchanged.
+    """
+    token = token or None
+
+    def _walk(node: Any) -> Any:
+        if isinstance(node, Mapping):
+            sanitized: dict[str, Any] = {}
+            for key, sub in node.items():
+                if isinstance(key, str) and key.lower() in SENSITIVE_KEYS:
+                    sanitized[key] = REDACTED
+                else:
+                    sanitized[key] = _walk(sub)
+            return sanitized
+        if isinstance(node, list | tuple):
+            return [_walk(item) for item in node]
+        if isinstance(node, str):
+            if token and token in node:
+                return node.replace(token, REDACTED)
+            return node
+        return node
+
+    return _walk(value)
 
 
 def append_jsonl(destination: Path, record: dict[str, Any]) -> None:
