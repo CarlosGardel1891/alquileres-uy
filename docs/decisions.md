@@ -80,3 +80,66 @@ Motivación:
 - El mercado de alquileres tiene tendencia y estacionalidad; un split aleatorio filtra información del futuro hacia el pasado y sobreestima el rendimiento.
 - El objetivo de producción es predecir precios sobre publicaciones **nuevas**, por lo que la evaluación debe simular exactamente ese escenario.
 - Reduce fuga de información y hace el número reportado comparable con lo que ocurrirá en producción.
+
+## MercadoLibre como fuente primaria
+
+La fuente primaria de publicaciones es **MercadoLibre Uruguay** (`site_id = MLU`). Su uso queda **condicionado al source gate** documentado en `docs/mercadolibre-source-contract.md`.
+
+Si el gate devuelve `REJECTED` o `INCONCLUSIVE`:
+
+- no se implementa ni ejecuta la ingesta masiva sobre MercadoLibre;
+- no se inicia scraping automáticamente sobre otra fuente (InfoCasas, Gallito);
+- se detiene la fase y se entrega la evidencia (respuestas y cobertura) al TL para decidir una fase de fallback.
+
+Esta decisión evita construir infraestructura sobre una fuente que no puede sostener el volumen o la calidad requerida.
+
+## Segmentación en lugar de `search_type=scan`
+
+Para la búsqueda pública general (`/sites/MLU/search`) **no se usa** `search_type=scan`.
+
+La documentación oficial describe `search_type=scan` para `/users/{user_id}/items/search` (ítems de un usuario), no para la búsqueda general del sitio. Asumir lo contrario sería un supuesto no verificado que se sale del contrato observado.
+
+En su lugar, cuando un segmento reporta más de ~900 resultados, la ingesta lo divide:
+
+1. por rango de precio;
+2. por dormitorios si sigue excedido;
+3. eventualmente por barrio.
+
+Los rangos son contiguos y sin huecos. La segmentación se registra en `queries` (SQLite) y en cada `manifest.json`.
+
+## SQLite para control, no para datos analíticos
+
+`data/ingestion.sqlite` almacena únicamente **control-plane**:
+
+- corridas (`runs`);
+- consultas ejecutadas (`queries`);
+- IDs vistos (`items`) con idempotencia por `item_id`;
+- relación entre corridas e ítems (`run_items`);
+- errores permanentes (`request_errors`).
+
+**No** contiene el payload analítico de las publicaciones. El payload analítico (con features derivadas) aparecerá como **Parquet** en la Fase 2, generado a partir de los archivos crudos en `data/raw/mercadolibre/`.
+
+Esta separación deja a SQLite en un rol simple y auditable, y permite reprocesar el analítico sin tocar el control de corridas.
+
+## Ingesta local
+
+La ingesta real corre **localmente**, nunca desde GitHub Actions ni desde Render.
+
+Motivación:
+
+- GitHub Actions no debe emitir tráfico sostenido contra MercadoLibre desde IPs compartidas ni almacenar tokens.
+- Render tiene filesystem efímero y no ofrece garantías de persistencia para carpetas crudas.
+- Reproducibilidad y control quedan en la máquina de desarrollo; el pipeline de deploy sólo sirve modelos ya entrenados.
+
+CI se limita a instalar dependencias y correr tests con fixtures locales.
+
+## Datos crudos inmutables (refuerzo)
+
+Una respuesta de MercadoLibre guardada en `data/raw/mercadolibre/**/` **nunca** se modifica:
+
+- las escrituras son atómicas (`.tmp` + `os.replace`);
+- `atomic_write_bytes` rehúsa sobrescribir un archivo existente;
+- las nuevas corridas van a carpetas nuevas identificadas por `timestamp_run-id`;
+- todas las correcciones se hacen re-parseando los originales.
+
+Esto garantiza que cualquier resultado de ETL o entrenamiento se pueda reproducir bit-a-bit a partir de la evidencia original.
