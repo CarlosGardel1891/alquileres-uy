@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import uuid
 from collections import Counter
 from collections.abc import Iterable
@@ -20,19 +22,22 @@ from .currency import (
     ExchangeRate,
     convert_common_expenses,
     convert_price_to_usd,
+    ensure_mode_consistent,
     load_exchange_rate,
 )
 from .deduplication import content_hash, possible_duplicate_key
 from .extractors import (
+    AREA_ATTRIBUTE_IDS,
     ATTRIBUTE_MAP,
     BOOLEAN_ATTRIBUTES,
     attribute_value,
     index_attributes,
     known_attribute_ids,
+    parse_area,
     parse_bool,
-    parse_number,
+    parse_plain_number,
 )
-from .lineage import build_lineage
+from .lineage import build_input_hashes, build_lineage, file_sha256
 from .loaders import iter_raw_items
 from .models import (
     CANONICAL_COLUMN_ORDER,
@@ -58,7 +63,38 @@ from .schemas import (
 from .source_scope import classify_location
 from .writers import write_json, write_parquet
 
-FIXTURES_ROOT_MARKER = Path("tests/fixtures").resolve()
+# Anchored to the repository root via this file's location instead of the
+# current working directory, so the CLI works from anywhere.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+FIXTURES_ROOT_MARKER = _REPO_ROOT / "tests" / "fixtures"
+
+
+class StrictQualityGateError(RuntimeError):
+    """Raised when ``--strict`` finds any quality signal in the run."""
+
+    def __init__(
+        self,
+        *,
+        rejected_items: int,
+        unmapped_attributes: int,
+        invalid_dates: int,
+        area_inconsistencies: int,
+        rows_with_quality_issues: int,
+        unsupported_common_expenses: int,
+    ) -> None:
+        self.rejected_items = rejected_items
+        self.unmapped_attributes = unmapped_attributes
+        self.invalid_dates = invalid_dates
+        self.area_inconsistencies = area_inconsistencies
+        self.rows_with_quality_issues = rows_with_quality_issues
+        self.unsupported_common_expenses = unsupported_common_expenses
+        super().__init__(
+            "strict quality gate failed: "
+            f"rejected={rejected_items} unmapped_attrs={unmapped_attributes} "
+            f"invalid_dates={invalid_dates} area_inconsistencies={area_inconsistencies} "
+            f"rows_with_quality_issues={rows_with_quality_issues} "
+            f"unsupported_common_expenses={unsupported_common_expenses}"
+        )
 
 
 @dataclass
@@ -89,27 +125,37 @@ class EtlPipeline:
     # ---- entry points -------------------------------------------------
 
     def dry_run(self) -> dict[str, Any]:
-        self._exchange_rate = load_exchange_rate(self._config.exchange_rate_path)
+        rate = load_exchange_rate(self._config.exchange_rate_path)
+        ensure_mode_consistent(rate, self._config.data_mode)
+        self._exchange_rate = rate
         self._aliases = load_aliases(self._config.neighborhood_aliases_path)
         runs = self._load_runs()
-        batches = sum(len(run.item_batch_paths) for run in runs)
-        descriptions = sum(len(run.description_paths) for run in runs)
+
+        input_hashes, input_count = build_input_hashes(runs)
         return {
             "dry_run": True,
             "data_mode": self._config.data_mode,
+            "strict": self._config.strict,
             "input_runs": [str(run.run_directory.name) for run in runs],
-            "input_batch_count": batches,
-            "input_description_count": descriptions,
-            "exchange_rate_uyu_per_usd": str(self._exchange_rate.uyu_per_usd),
-            "exchange_rate_source": self._exchange_rate.source,
-            "exchange_rate_data_mode": self._exchange_rate.data_mode,
+            "input_batch_count": sum(len(run.item_batch_paths) for run in runs),
+            "input_description_count": sum(len(run.description_paths) for run in runs),
+            "input_file_count": input_count,
+            "input_file_sha256": input_hashes,
+            "exchange_rate_uyu_per_usd": str(rate.uyu_per_usd),
+            "exchange_rate_source": rate.source,
+            "exchange_rate_data_mode": rate.data_mode,
+            "exchange_rate_sha256": file_sha256(self._config.exchange_rate_path),
+            "neighborhood_aliases_sha256": file_sha256(self._config.neighborhood_aliases_path),
+            "gate_approval_sha256": file_sha256(self._config.gate_approval_path),
             "output_dir": str(self._config.output_dir),
         }
 
     def run(self) -> EtlResult:
         started_at = datetime.now(UTC)
         etl_run_id = uuid.uuid4().hex
-        self._exchange_rate = load_exchange_rate(self._config.exchange_rate_path)
+        rate = load_exchange_rate(self._config.exchange_rate_path)
+        ensure_mode_consistent(rate, self._config.data_mode)
+        self._exchange_rate = rate
         self._aliases = load_aliases(self._config.neighborhood_aliases_path)
         runs = self._load_runs()
 
@@ -119,6 +165,7 @@ class EtlPipeline:
         area_inconsistencies = 0
         invalid_dates = 0
         common_expenses_missing = 0
+        unsupported_common_expenses = 0
         input_items = 0
         parsed_items = 0
 
@@ -132,12 +179,16 @@ class EtlPipeline:
                     rejections.append(_build_rejection(extracted, ("invalid_item_envelope",)))
                     continue
                 parsed_items += 1
-                canonical, row_rejection, per_row_stats = self._transform_item(extracted, run)
+                canonical, row_rejection, per_row_stats = self._transform_item(
+                    extracted, run, started_at
+                )
                 unmapped_counter.update(per_row_stats.unmapped_attributes)
                 area_inconsistencies += per_row_stats.area_inconsistencies
                 invalid_dates += per_row_stats.invalid_dates
                 if per_row_stats.common_expenses_missing:
                     common_expenses_missing += 1
+                if per_row_stats.unsupported_common_expenses:
+                    unsupported_common_expenses += 1
                 if row_rejection is not None:
                     rejections.append(row_rejection)
                 elif canonical is not None:
@@ -150,90 +201,123 @@ class EtlPipeline:
 
         self._validate_schemas(canonical_df, model_ready_df, rejected_df, duplicate_df)
 
+        rows_with_quality_issues = _count_rows_with_issues(canonical_df)
+        if self._config.strict:
+            self._enforce_strict(
+                rejected=len(rejected_df),
+                unmapped=sum(unmapped_counter.values()),
+                invalid_dates=invalid_dates,
+                area_inconsistencies=area_inconsistencies,
+                rows_with_quality_issues=rows_with_quality_issues,
+                unsupported_common_expenses=unsupported_common_expenses,
+            )
+
         finished_at = datetime.now(UTC)
-        workdir = self._prepare_workdir(started_at, etl_run_id)
-        outputs = {
-            "listings": write_parquet(
-                canonical_df, workdir / "listings.parquet", sort_by="source_item_id"
-            ),
-            "model_ready": write_parquet(
-                model_ready_df, workdir / "model_ready.parquet", sort_by="source_item_id"
-            ),
-            "rejected_listings": write_parquet(
-                rejected_df, workdir / "rejected_listings.parquet", sort_by="source_item_id"
-            ),
-            "duplicate_candidates": write_parquet(
-                duplicate_df,
-                workdir / "duplicate_candidates.parquet",
-                sort_by="possible_duplicate_group_id",
-            ),
-        }
+        workdir_final = self._final_workdir_path(started_at, etl_run_id)
+        workdir_tmp = workdir_final.with_suffix(workdir_final.suffix + ".tmp")
+        if workdir_tmp.exists():
+            shutil.rmtree(workdir_tmp)
+        workdir_tmp.mkdir(parents=True, exist_ok=False)
 
-        quality_report = build_quality_report(
-            canonical=canonical_df,
-            model_ready=model_ready_df,
-            rejected=rejected_df,
-            duplicate_candidates=duplicate_df,
-            input_items=input_items,
-            parsed_items=parsed_items,
-            unmapped_attribute_counts=dict(unmapped_counter),
-            area_inconsistencies=area_inconsistencies,
-            invalid_dates=invalid_dates,
-            common_expenses_missing=common_expenses_missing,
-            data_mode=self._config.data_mode,
-        )
-        write_json(quality_report, workdir / "data_quality_report.json")
-        write_json(dict(unmapped_counter), workdir / "unmapped_attributes.json")
+        try:
+            outputs = {
+                "listings": write_parquet(
+                    canonical_df, workdir_tmp / "listings.parquet", sort_by="source_item_id"
+                ),
+                "model_ready": write_parquet(
+                    model_ready_df,
+                    workdir_tmp / "model_ready.parquet",
+                    sort_by="source_item_id",
+                ),
+                "rejected_listings": write_parquet(
+                    rejected_df,
+                    workdir_tmp / "rejected_listings.parquet",
+                    sort_by="source_item_id",
+                ),
+                "duplicate_candidates": write_parquet(
+                    duplicate_df,
+                    workdir_tmp / "duplicate_candidates.parquet",
+                    sort_by="possible_duplicate_group_id",
+                ),
+            }
 
-        row_counts = {
-            "canonical": int(len(canonical_df)),
-            "model_ready": int(len(model_ready_df)),
-            "rejected": int(len(rejected_df)),
-            "duplicate_candidates": int(len(duplicate_df)),
-        }
-        summary = {
-            "etl_run_id": etl_run_id,
-            "status": "completed",
-            "data_mode": self._config.data_mode,
-            "schema_version": ETL_SCHEMA_VERSION,
-            "input_runs": len(runs),
-            "input_items": input_items,
-            "canonical_items": row_counts["canonical"],
-            "model_ready_items": row_counts["model_ready"],
-            "rejected_items": row_counts["rejected"],
-            "duplicate_candidates": row_counts["duplicate_candidates"],
-            "duration_seconds": round((finished_at - started_at).total_seconds(), 3),
-            "started_at": _iso(started_at),
-            "finished_at": _iso(finished_at),
-        }
-        write_json(summary, workdir / "etl_summary.json")
+            quality_report = build_quality_report(
+                canonical=canonical_df,
+                model_ready=model_ready_df,
+                rejected=rejected_df,
+                duplicate_candidates=duplicate_df,
+                input_items=input_items,
+                parsed_items=parsed_items,
+                unmapped_attribute_counts=dict(unmapped_counter),
+                area_inconsistencies=area_inconsistencies,
+                invalid_dates=invalid_dates,
+                common_expenses_missing=common_expenses_missing,
+                data_mode=self._config.data_mode,
+            )
+            outputs["data_quality_report"] = write_json(
+                quality_report, workdir_tmp / "data_quality_report.json"
+            )
+            outputs["unmapped_attributes"] = write_json(
+                dict(unmapped_counter), workdir_tmp / "unmapped_attributes.json"
+            )
 
-        lineage = build_lineage(
-            etl_run_id=etl_run_id,
-            etl_schema_version=ETL_SCHEMA_VERSION,
-            data_mode=self._config.data_mode,
-            started_at=_iso(started_at),
-            finished_at=_iso(finished_at),
-            runs=runs,
-            gate_approval_path=self._config.gate_approval_path,
-            exchange_rate_path=self._config.exchange_rate_path,
-            neighborhood_aliases_path=self._config.neighborhood_aliases_path,
-            output_files=outputs,
-            row_counts=row_counts,
-        )
-        write_json(lineage, workdir / "lineage.json")
+            row_counts = {
+                "canonical": int(len(canonical_df)),
+                "model_ready": int(len(model_ready_df)),
+                "rejected": int(len(rejected_df)),
+                "duplicate_candidates": int(len(duplicate_df)),
+            }
+            summary = {
+                "etl_run_id": etl_run_id,
+                "status": "completed",
+                "data_mode": self._config.data_mode,
+                "schema_version": ETL_SCHEMA_VERSION,
+                "strict": self._config.strict,
+                "input_runs": len(runs),
+                "input_items": input_items,
+                "canonical_items": row_counts["canonical"],
+                "model_ready_items": row_counts["model_ready"],
+                "rejected_items": row_counts["rejected"],
+                "duplicate_candidates": row_counts["duplicate_candidates"],
+                "duration_seconds": round((finished_at - started_at).total_seconds(), 3),
+                "started_at": _iso(started_at),
+                "finished_at": _iso(finished_at),
+            }
+            outputs["etl_summary"] = write_json(summary, workdir_tmp / "etl_summary.json")
 
-        schema_snapshot = {
-            "schema_version": ETL_SCHEMA_VERSION,
-            "canonical_columns": list(CANONICAL_COLUMN_ORDER),
-            "model_ready_required": list(MODEL_READY_REQUIRED_COLUMNS),
-            "model_ready_forbidden": list(MODEL_READY_FORBIDDEN_COLUMNS),
-        }
-        write_json(schema_snapshot, workdir / "schema.json")
+            schema_snapshot = {
+                "schema_version": ETL_SCHEMA_VERSION,
+                "canonical_columns": list(CANONICAL_COLUMN_ORDER),
+                "model_ready_required": list(MODEL_READY_REQUIRED_COLUMNS),
+                "model_ready_forbidden": list(MODEL_READY_FORBIDDEN_COLUMNS),
+            }
+            outputs["schema"] = write_json(schema_snapshot, workdir_tmp / "schema.json")
+
+            lineage = build_lineage(
+                etl_run_id=etl_run_id,
+                etl_schema_version=ETL_SCHEMA_VERSION,
+                data_mode=self._config.data_mode,
+                started_at=_iso(started_at),
+                finished_at=_iso(finished_at),
+                runs=runs,
+                gate_approval_path=self._config.gate_approval_path,
+                exchange_rate_path=self._config.exchange_rate_path,
+                neighborhood_aliases_path=self._config.neighborhood_aliases_path,
+                output_files=outputs,
+                row_counts=row_counts,
+            )
+            outputs["lineage"] = write_json(lineage, workdir_tmp / "lineage.json")
+        except Exception:
+            shutil.rmtree(workdir_tmp, ignore_errors=True)
+            raise
+
+        # Atomic publication.
+        workdir_final.parent.mkdir(parents=True, exist_ok=True)
+        workdir_tmp.rename(workdir_final)
 
         return EtlResult(
             etl_run_id=etl_run_id,
-            workdir=workdir,
+            workdir=workdir_final,
             canonical=canonical_df,
             model_ready=model_ready_df,
             rejected=rejected_df,
@@ -259,13 +343,13 @@ class EtlPipeline:
         self,
         extracted: ExtractedItem,
         run: RawRunContract,
+        etl_processed_at: datetime,
     ) -> tuple[dict[str, Any] | None, RowRejection | None, _PerRowStats]:
         row = CanonicalRow()
         body = extracted.body
         attributes = index_attributes(body)
         stats = _PerRowStats()
 
-        # scope classification
         from .extractors import extract_scope
 
         operation, property_type, reasons = extract_scope(body, self._verified_category_ids)
@@ -273,7 +357,6 @@ class EtlPipeline:
         if location_reason:
             reasons.append(location_reason)
 
-        # price + currency
         price_original = _coerce_number(body.get("price"))
         currency_original = _coerce_string(body.get("currency_id"))
         price_usd, price_error = convert_price_to_usd(
@@ -309,20 +392,18 @@ class EtlPipeline:
                 stats,
             )
 
-        # Numeric attributes
         for attribute_id, column in ATTRIBUTE_MAP.items():
             if attribute_id == "COMMON_EXPENSES":
                 continue
-            value, error = parse_number(attribute_value(attributes.get(attribute_id)))
+            parser = parse_area if attribute_id in AREA_ATTRIBUTE_IDS else parse_plain_number
+            value, error = parser(attribute_value(attributes.get(attribute_id)))
             if error:
                 row.add_issue(column, error)
             row.set(column, value)
 
-        # Booleans
         for attribute_id, column in BOOLEAN_ATTRIBUTES.items():
             row.set(column, parse_bool(attribute_value(attributes.get(attribute_id))))
 
-        # Areas
         total_area = row.columns.get("total_area_m2")
         covered_area = row.columns.get("covered_area_m2")
         total_area_derived = False
@@ -335,7 +416,6 @@ class EtlPipeline:
         row.set("total_area_m2", total_area)
         row.set("total_area_derived_from_covered", total_area_derived)
 
-        # Location, textual fields
         location = body.get("location") or body.get("address") or {}
         department = "Montevideo" if montevideo else None
         city_name = None
@@ -354,16 +434,15 @@ class EtlPipeline:
         aliases = self._aliases or NeighborhoodAliases()
         neighborhood_normalized, neighborhood_known = aliases.resolve(neighborhood_raw)
 
-        # dates
         date_created, invalid = _parse_date(body.get("date_created"))
         if invalid:
             row.add_issue("date_created", invalid)
-            stats.invalid_dates += 1
+            if invalid == "invalid_date":
+                stats.invalid_dates += 1
         last_updated, invalid_last = _parse_date(body.get("last_updated"))
         if invalid_last:
             row.add_issue("last_updated", invalid_last)
 
-        # Fill canonical columns
         row.set("schema_version", ETL_SCHEMA_VERSION)
         row.set("data_mode", self._config.data_mode)
         row.set("source", run.source)
@@ -419,14 +498,12 @@ class EtlPipeline:
             row.columns.get("common_expenses_usd") is None
         ):
             row.add_issue("common_expenses_usd", "unsupported_currency")
+            stats.unsupported_common_expenses = True
         row.set(
             "total_monthly_cost_usd",
             _sum_optional(price_usd, common_expenses["common_expenses_usd"]),
         )
-        row.set(
-            "exchange_rate_uyu_per_usd",
-            float(self._exchange_rate.uyu_per_usd),  # type: ignore[union-attr]
-        )
+        row.set("exchange_rate_uyu_per_usd", float(self._exchange_rate.uyu_per_usd))  # type: ignore[union-attr]
         row.set(
             "exchange_rate_date",
             self._exchange_rate.effective_date.isoformat(),  # type: ignore[union-attr]
@@ -440,7 +517,7 @@ class EtlPipeline:
         row.set("observations_count", 1)
         row.set("possible_duplicate_group_id", None)
         row.set("exact_content_hash", None)
-        row.set("etl_processed_at", datetime.now(UTC))
+        row.set("etl_processed_at", etl_processed_at)
         row.set(
             "quality_issues",
             json.dumps(
@@ -450,7 +527,6 @@ class EtlPipeline:
             ),
         )
 
-        # Unmapped attribute reporting
         unknown_attrs = set(attributes) - known_attribute_ids()
         for attribute_id in unknown_attrs:
             stats.unmapped_attributes[attribute_id] += 1
@@ -466,17 +542,35 @@ class EtlPipeline:
             if column not in df.columns:
                 df[column] = pd.NA
         df = df[list(CANONICAL_COLUMN_ORDER)]
-        # Deduplicate by source_item_id: keep the newest last_updated then
-        # newest last_seen_at then lexicographically largest raw_item_path.
+
+        # Aggregate first/last seen and count per (source, source_item_id) BEFORE
+        # selecting a canonical row. Otherwise the selected row would drop the
+        # earliest observation timestamp we ever saw.
+        agg = (
+            df.groupby(["source", "source_item_id"], dropna=False)
+            .agg(
+                agg_first_seen=("first_seen_at", "min"),
+                agg_last_seen=("last_seen_at", "max"),
+                agg_count=("source_item_id", "size"),
+            )
+            .reset_index()
+        )
+
+        # Canonical row selection: max(last_updated) → max(last_seen_at) →
+        # max(source_run_id) → max(raw_item_path). All ascending sorts then
+        # keep="last" pop the winner deterministically.
         df = df.sort_values(
-            by=["last_updated", "last_seen_at", "raw_item_path"],
-            ascending=[True, True, True],
+            by=["last_updated", "last_seen_at", "source_run_id", "raw_item_path"],
+            ascending=[True, True, True, True],
             na_position="first",
             kind="stable",
         )
-        seen_counts = df.groupby("source_item_id", dropna=False).size().to_dict()
-        df = df.drop_duplicates(subset=["source_item_id"], keep="last")
-        df["observations_count"] = df["source_item_id"].map(seen_counts).astype("Int64")
+        df = df.drop_duplicates(subset=["source", "source_item_id"], keep="last")
+        df = df.merge(agg, on=["source", "source_item_id"], how="left")
+        df["first_seen_at"] = df["agg_first_seen"]
+        df["last_seen_at"] = df["agg_last_seen"]
+        df["observations_count"] = df["agg_count"].astype("Int64")
+        df = df.drop(columns=["agg_first_seen", "agg_last_seen", "agg_count"])
 
         df["exact_content_hash"] = df.apply(lambda row: content_hash(row.to_dict()), axis=1)
         df["possible_duplicate_group_id"] = df.apply(
@@ -487,21 +581,20 @@ class EtlPipeline:
     def _assemble_rejected(self, rejections: list[RowRejection]) -> pd.DataFrame:
         if not rejections:
             return pd.DataFrame(columns=list(REJECTED_COLUMN_ORDER))
-        records = []
-        for rejection in rejections:
-            records.append(
-                {
-                    "source_item_id": rejection.source_item_id,
-                    "source_run_id": rejection.source_run_id,
-                    "raw_item_path": rejection.raw_item_path,
-                    "rejection_reasons": "|".join(rejection.reasons),
-                    "raw_category_id": rejection.raw_category_id,
-                    "raw_currency": rejection.raw_currency,
-                    "raw_price": rejection.raw_price,
-                    "raw_operation": rejection.raw_operation,
-                    "raw_property_type": rejection.raw_property_type,
-                }
-            )
+        records = [
+            {
+                "source_item_id": rejection.source_item_id,
+                "source_run_id": rejection.source_run_id,
+                "raw_item_path": rejection.raw_item_path,
+                "rejection_reasons": "|".join(rejection.reasons),
+                "raw_category_id": rejection.raw_category_id,
+                "raw_currency": rejection.raw_currency,
+                "raw_price": rejection.raw_price,
+                "raw_operation": rejection.raw_operation,
+                "raw_property_type": rejection.raw_property_type,
+            }
+            for rejection in rejections
+        ]
         return pd.DataFrame(records, columns=list(REJECTED_COLUMN_ORDER))
 
     def _assemble_duplicates(self, canonical: pd.DataFrame) -> pd.DataFrame:
@@ -541,7 +634,7 @@ class EtlPipeline:
         df = df[df["total_area_m2"] > 0]
         conflict_mask = df["quality_issues"].str.contains(
             "covered_area_greater_than_total", na=False
-        )
+        ) | df["quality_issues"].str.contains("unsupported_area_unit", na=False)
         df = df[~conflict_mask]
         df = df[[*required, "bathrooms"]]
         df["bedrooms"] = df["bedrooms"].astype("Int64")
@@ -562,17 +655,46 @@ class EtlPipeline:
         if not canonical.empty:
             CanonicalListingsSchema.validate(canonical, lazy=True)
         if not model_ready.empty:
+            if str(model_ready["date_created"].dtype) != "datetime64[ns, UTC]":
+                raise ValueError("model_ready date_created must be UTC-aware")
             ModelReadySchema.validate(model_ready, lazy=True)
         if not rejected.empty:
             RejectedListingsSchema.validate(rejected, lazy=True)
         if not duplicate_candidates.empty:
             DuplicateCandidatesSchema.validate(duplicate_candidates, lazy=True)
 
-    def _prepare_workdir(self, started_at: datetime, etl_run_id: str) -> Path:
+    def _final_workdir_path(self, started_at: datetime, etl_run_id: str) -> Path:
         timestamp = started_at.strftime("%Y-%m-%dT%H%M%SZ")
-        workdir = Path(self._config.output_dir) / f"{timestamp}_{etl_run_id[:8]}"
-        workdir.mkdir(parents=True, exist_ok=False)
-        return workdir
+        return Path(self._config.output_dir) / f"{timestamp}_{etl_run_id[:8]}"
+
+    def _enforce_strict(
+        self,
+        *,
+        rejected: int,
+        unmapped: int,
+        invalid_dates: int,
+        area_inconsistencies: int,
+        rows_with_quality_issues: int,
+        unsupported_common_expenses: int,
+    ) -> None:
+        if any(
+            (
+                rejected,
+                unmapped,
+                invalid_dates,
+                area_inconsistencies,
+                rows_with_quality_issues,
+                unsupported_common_expenses,
+            )
+        ):
+            raise StrictQualityGateError(
+                rejected_items=rejected,
+                unmapped_attributes=unmapped,
+                invalid_dates=invalid_dates,
+                area_inconsistencies=area_inconsistencies,
+                rows_with_quality_issues=rows_with_quality_issues,
+                unsupported_common_expenses=unsupported_common_expenses,
+            )
 
 
 @dataclass
@@ -581,10 +703,23 @@ class _PerRowStats:
     area_inconsistencies: int = 0
     invalid_dates: int = 0
     common_expenses_missing: bool = False
+    unsupported_common_expenses: bool = False
 
     def __post_init__(self) -> None:
         if self.unmapped_attributes is None:
             self.unmapped_attributes = Counter()
+
+
+def _count_rows_with_issues(canonical: pd.DataFrame) -> int:
+    if canonical.empty or "quality_issues" not in canonical.columns:
+        return 0
+    return int(
+        canonical["quality_issues"]
+        .fillna("[]")
+        .apply(lambda v: len(json.loads(v)) if isinstance(v, str) else 0)
+        .gt(0)
+        .sum()
+    )
 
 
 def _build_rejection(
@@ -707,3 +842,8 @@ def _bucketed_price(value: Any) -> int | None:
         return int(Decimal(str(value)) // Decimal("50"))
     except Exception:
         return None
+
+
+# Backwards-compatible import point for other modules or tests that need
+# to hash a raw file.
+_ = hashlib
