@@ -41,7 +41,8 @@ Distingue explícitamente entre:
 ## 4. Categorías observadas
 
 - **Observado:** `MLU1466` existe y es la categoría **"Casas"** (no "Apartamentos" como asumía inicialmente el seed plan). `total_items_in_this_category = 41745` a la fecha del sondeo.
-- **Supuesto pendiente de reverificar:** los IDs de `Apartamentos` y demás categorías de inmuebles deben confirmarse vía `/sites/MLU/categories`, que hoy está bloqueado. La constante `CATEGORY_APARTMENT = "MLU1466"` en `src/alquileres_uy/ingest/query_plan.py` **debe corregirse** cuando el gate se apruebe.
+- **No conocido:** el ID validado de "Apartamentos". `/sites/MLU/categories` (que lista todo el árbol del sitio) responde `403` sin token, por lo que no puede consultarse anónimamente.
+- **Decisión propia:** el código **ya no** contiene constantes hardcodeadas de categorías. `query_plan.build_initial_plan` exige un `ApprovedSourceContract.category_ids` verificado por el propio gate contra `/sites/MLU/categories`. Sin ese mapping validado no hay approval, y sin approval no hay ingesta.
 
 ## 5. Filtros disponibles
 
@@ -85,6 +86,7 @@ Consecuencias, siguiendo el "Camino bloqueado" del plan de la fase:
 
 - **No** se implementó ni ejecutó la ingesta masiva.
 - **No** se inició scraping de otra fuente (InfoCasas, Gallito).
+- **No existe** un `source_gate_approval.json` — el pipeline de ingesta se niega a arrancar sin ese artefacto. La ingesta está bloqueada **por código**, no sólo por convención.
 - Se detiene la fase.
 - La rama `feat/002-mercadolibre-ingestion` queda como spike + documentación del bloqueo.
 - Se solicita decisión del TL para abrir una fase de fallback (por ejemplo: obtener token oficial de MercadoLibre, o priorizar otra fuente).

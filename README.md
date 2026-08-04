@@ -142,17 +142,21 @@ Los artefactos del gate (respuestas crudas de búsqueda, batch de multiget, desc
 
 ### 2. Ejecutar la ingesta
 
-Sólo si el source gate devolvió `0`.
+Sólo si el source gate devolvió `0`. La ingesta **requiere** el flag `--gate-approval` apuntando al `source_gate_approval.json` emitido por esa corrida APPROVED. El pipeline valida internamente que el `source`, `site_id`, `category_ids` verificados y el SHA-256 del `coverage.json` referenciado coincidan; cualquier discrepancia termina en exit code `2` sin llamadas de red, sin escritura en SQLite y sin crear carpeta de corrida.
+
+Reemplazá `PATH` por la ruta al `source_gate_approval.json` de tu corrida APPROVED (que hoy **no existe**: la fase está bloqueada, ver más abajo).
 
 ```bash
-python scripts/run_ingestion.py --max-items 100        # corrida chica de validación
-python scripts/run_ingestion.py --max-items 5000       # corrida completa
-python scripts/run_ingestion.py --dry-run              # imprime el plan, sin red
+python scripts/run_ingestion.py --gate-approval PATH --dry-run              # imprime el plan real, sin red
+python scripts/run_ingestion.py --gate-approval PATH --max-items 100        # corrida chica de validación
+python scripts/run_ingestion.py --gate-approval PATH --max-items 5000       # corrida completa
 ```
 
-Flags disponibles: `--max-items`, `--requests-per-second`, `--timeout`, `--max-attempts`, `--output-dir`, `--database-path`, `--dry-run`.
+Flags disponibles: `--gate-approval` (obligatorio), `--max-items`, `--requests-per-second`, `--timeout`, `--max-attempts`, `--output-dir`, `--database-path`, `--dry-run`.
 
 Cada corrida escribe sus datos crudos en `data/raw/mercadolibre/<timestamp>_<run-id>/`, con subdirectorios `searches/`, `items/`, `descriptions/`, `errors/`, más `manifest.json` e `ingestion_summary.json`.
+
+> Hasta que exista un source gate `APPROVED` real (con token oficial), no hay `source_gate_approval.json`. La ingesta masiva permanece **bloqueada por código**, no sólo por convención.
 
 ### Datos y persistencia
 
@@ -179,8 +183,10 @@ GitHub Actions **no** ejecuta la ingesta ni el source gate. Sólo instala depend
 - **Decisión:** `INCONCLUSIVE` (exit code `3`).
 - **Token usado:** no.
 - **Motivo:** MercadoLibre respondió `403 forbidden` (con `blocked_by: PolicyAgent`) a `GET /sites/MLU/search` y otros endpoints del sitio sin token. El endpoint puntual `/categories/{id}` sí responde `200`, lo que confirma que sólo los recursos del sitio están cerrados anónimamente.
-- **Consecuencia:** la ingesta masiva **no** se ejecutó. La fase se detiene y espera decisión (obtener token oficial de MercadoLibre, priorizar otra fuente, o alcance reducido).
-- **Evidencia detallada:** `docs/mercadolibre-source-contract.md` (secciones 3 y 9).
+- **Categorías verificadas:** **ninguna**. La constante hardcodeada anterior (`MLU1466` como "Apartamentos") era incorrecta — el endpoint real la devuelve como "Casas". El proyecto **no** tiene todavía IDs de categoría validados contra el árbol de sitio y, por diseño, se niega a asumir uno.
+- **Consecuencia:** la ingesta masiva **no** se ejecutó y no puede ejecutarse. El script `run_ingestion.py` requiere un `source_gate_approval.json` con hash del reporte de cobertura; hoy ese artefacto no existe.
+- **Próximos pasos posibles:** obtener token oficial de MercadoLibre, priorizar otra fuente, o alcance reducido con `/categories`.
+- **Evidencia detallada:** `docs/mercadolibre-source-contract.md`.
 
 ## Fases del proyecto
 
