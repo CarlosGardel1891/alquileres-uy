@@ -36,11 +36,22 @@ def _description() -> FakeResponse:
 def _site_categories() -> FakeResponse:
     return FakeResponse(
         json_data=[
-            {"id": "MLU1743", "name": "Apartamentos"},
-            {"id": "MLU1466", "name": "Casas"},
-            {"id": "MLU9999", "name": "Otro"},
+            {"id": "MLU_TEST_APARTMENT", "name": "Apartamentos"},
+            {"id": "MLU_TEST_HOUSE", "name": "Casas"},
+            {"id": "MLU_TEST_OTHER", "name": "Otro"},
         ]
     )
+
+
+def _category_details() -> dict[str, FakeResponse]:
+    """Per-id detail responses used by the category tree walker."""
+    return {
+        "MLU_TEST_APARTMENT": FakeResponse(
+            json_data={"id": "MLU_TEST_APARTMENT", "name": "Apartamentos"}
+        ),
+        "MLU_TEST_HOUSE": FakeResponse(json_data={"id": "MLU_TEST_HOUSE", "name": "Casas"}),
+        "MLU_TEST_OTHER": FakeResponse(json_data={"id": "MLU_TEST_OTHER", "name": "Otro"}),
+    }
 
 
 def _config(tmp_path: Path, token: str | None = None) -> IngestionConfig:
@@ -50,6 +61,31 @@ def _config(tmp_path: Path, token: str | None = None) -> IngestionConfig:
         access_token=token,
         requests_per_second=1e9,
         max_attempts=2,
+    )
+
+
+def _full_success_responses() -> list[FakeResponse]:
+    """Response queue that satisfies a complete APPROVED gate flow.
+
+    Order matches the source gate call sequence:
+    1. search
+    2. multiget
+    3. get_site_categories (BFS root)
+    4. get_category x 3 (three root nodes in :func:`_site_categories`)
+    5. get_item_description x 20
+    """
+    root_nodes = _site_categories().json()
+    return (
+        [
+            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
+            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
+            FakeResponse(status_code=200, json_data=root_nodes),
+        ]
+        + [
+            FakeResponse(status_code=200, json_data={"id": node["id"], "name": node["name"]})
+            for node in root_nodes
+        ]
+        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
     )
 
 
@@ -78,14 +114,19 @@ class _StubClient:
         items_response: FakeResponse | None = None,
         description_response: FakeResponse | Exception | None = None,
         site_categories_response: FakeResponse | Exception | None = None,
+        category_details: dict[str, FakeResponse] | None = None,
     ) -> None:
         self._search_handler = search_handler
         self._items_response = items_response
         self._description_response = description_response
         self._site_categories_response = site_categories_response
+        self._category_details = (
+            category_details if category_details is not None else _category_details()
+        )
         self.search_calls: list[tuple[str, dict[str, Any] | None]] = []
         self.description_calls: list[str] = []
         self.site_categories_calls: list[str] = []
+        self.category_calls: list[str] = []
 
     def search_items(self, site_id: str, params: dict[str, Any] | None = None) -> FakeResponse:
         self.search_calls.append((site_id, params))
@@ -112,6 +153,13 @@ class _StubClient:
             return _site_categories()
         return self._site_categories_response
 
+    def get_category(self, category_id: str) -> FakeResponse:
+        self.category_calls.append(category_id)
+        response = self._category_details.get(category_id)
+        if response is None:
+            return FakeResponse(json_data={"id": category_id, "name": category_id})
+        return response
+
 
 def test_gate_approved_writes_approval_and_verified_categories(tmp_path: Path) -> None:
     anonymous = _StubClient(
@@ -127,7 +175,10 @@ def test_gate_approved_writes_approval_and_verified_categories(tmp_path: Path) -
     )
 
     assert report.decision is SourceGateDecision.APPROVED
-    assert report.verified_category_ids == {"apartment": "MLU1743", "house": "MLU1466"}
+    assert report.verified_category_ids == {
+        "apartment": "MLU_TEST_APARTMENT",
+        "house": "MLU_TEST_HOUSE",
+    }
     assert artifacts.approval is not None
     approval_body = json.loads(artifacts.approval.read_text(encoding="utf-8"))
     assert approval_body["decision"] == "APPROVED"
@@ -180,14 +231,7 @@ def test_gate_uses_authenticated_client_only_after_anonymous_401(tmp_path: Path)
     anonymous_session = FakeSession(
         [FakeResponse(status_code=401, json_data=load_fixture("unauthorized.json"))]
     )
-    auth_session = FakeSession(
-        [
-            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
-            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
-            FakeResponse(status_code=200, json_data=_site_categories().json()),
-        ]
-        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
-    )
+    auth_session = FakeSession(_full_success_responses())
 
     anonymous = _real_client(anonymous_session, _config(tmp_path, token=None))
     authenticated = _real_client(auth_session, _config(tmp_path, token="s3cret"))
@@ -211,14 +255,7 @@ def test_gate_uses_authenticated_client_after_anonymous_403(tmp_path: Path) -> N
     anonymous_session = FakeSession(
         [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
     )
-    auth_session = FakeSession(
-        [
-            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
-            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
-            FakeResponse(status_code=200, json_data=_site_categories().json()),
-        ]
-        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
-    )
+    auth_session = FakeSession(_full_success_responses())
 
     anonymous = _real_client(anonymous_session, _config(tmp_path, token=None))
     authenticated = _real_client(auth_session, _config(tmp_path, token="s3cret"))
@@ -232,14 +269,7 @@ def test_gate_uses_authenticated_client_after_anonymous_403(tmp_path: Path) -> N
 
 
 def test_gate_does_not_use_auth_client_when_anonymous_search_is_200(tmp_path: Path) -> None:
-    anonymous_session = FakeSession(
-        [
-            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
-            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
-            FakeResponse(status_code=200, json_data=_site_categories().json()),
-        ]
-        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
-    )
+    anonymous_session = FakeSession(_full_success_responses())
     auth_session = FakeSession([])  # would raise on any request
 
     anonymous = _real_client(anonymous_session, _config(tmp_path, token=None))
@@ -277,14 +307,7 @@ def test_gate_never_writes_the_token_into_any_artifact(tmp_path: Path) -> None:
     anonymous_session = FakeSession(
         [FakeResponse(status_code=401, json_data=load_fixture("unauthorized.json"))]
     )
-    auth_session = FakeSession(
-        [
-            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
-            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
-            FakeResponse(status_code=200, json_data=_site_categories().json()),
-        ]
-        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
-    )
+    auth_session = FakeSession(_full_success_responses())
     token = "very-secret-token-value"
     anonymous = _real_client(anonymous_session, _config(tmp_path, token=None))
     authenticated = _real_client(auth_session, _config(tmp_path, token=token))
@@ -299,7 +322,8 @@ def test_gate_never_writes_the_token_into_any_artifact(tmp_path: Path) -> None:
         artifacts.search_no_auth,
         artifacts.search_with_auth,
         artifacts.items_batch,
-        artifacts.site_categories,
+        artifacts.site_categories_root,
+        artifacts.category_tree_summary,
     ):
         if artifact_path is None:
             continue
@@ -486,14 +510,7 @@ def test_search_with_auth_not_created_when_no_token_available(tmp_path: Path) ->
 
 
 def test_search_with_auth_not_created_when_anonymous_returns_200(tmp_path: Path) -> None:
-    anon_session = FakeSession(
-        [
-            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
-            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
-            FakeResponse(status_code=200, json_data=_site_categories().json()),
-        ]
-        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
-    )
+    anon_session = FakeSession(_full_success_responses())
     auth_session = FakeSession([])  # would explode on any call
     anonymous = _real_client(anon_session, _config(tmp_path, token=None))
     authenticated = _real_client(auth_session, _config(tmp_path, token="s3cret"))
@@ -545,14 +562,7 @@ def test_probe_artifacts_never_contain_authorization_header_or_token(tmp_path: P
 
 
 def test_token_used_false_when_anonymous_returns_200_even_with_token(tmp_path: Path) -> None:
-    anon_session = FakeSession(
-        [
-            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
-            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
-            FakeResponse(status_code=200, json_data=_site_categories().json()),
-        ]
-        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
-    )
+    anon_session = FakeSession(_full_success_responses())
     auth_session = FakeSession([])
     anonymous = _real_client(anon_session, _config(tmp_path, token=None))
     authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
@@ -568,14 +578,7 @@ def test_token_used_true_when_auth_call_returns_200(tmp_path: Path) -> None:
     anon_session = FakeSession(
         [FakeResponse(status_code=401, json_data=load_fixture("unauthorized.json"))]
     )
-    auth_session = FakeSession(
-        [
-            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
-            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
-            FakeResponse(status_code=200, json_data=_site_categories().json()),
-        ]
-        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
-    )
+    auth_session = FakeSession(_full_success_responses())
     anonymous = _real_client(anon_session, _config(tmp_path, token=None))
     authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
 
@@ -690,6 +693,93 @@ def test_gate_inconclusive_when_only_house_verified(tmp_path: Path) -> None:
     assert artifacts.approval is None
     assert not (tmp_path / "gate" / APPROVAL_FILENAME).exists()
     assert "apartment" in " ".join(report.notes)
+
+
+def test_gate_rejected_when_target_valid_below_threshold(tmp_path: Path) -> None:
+    payload = copy.deepcopy(load_fixture("item_multiget_success.json"))
+    # Force 5 out of 20 items to have Operation=Venta → target_valid < 16
+    for entry in payload[:5]:
+        for attribute in entry["body"]["attributes"]:
+            if attribute["id"] == "OPERATION":
+                attribute["value_name"] = "Venta"
+                attribute["value_id"] = "242073"
+    anonymous = _StubClient(
+        search_handler=lambda site_id, params: _successful_search(),
+        items_response=FakeResponse(json_data=payload),
+        description_response=_description(),
+        site_categories_response=_site_categories(),
+    )
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path),
+        anonymous,
+        authenticated_client=None,
+        workdir=tmp_path / "gate",
+    )
+
+    assert report.target_valid_coverage.present == 15
+    assert report.decision is SourceGateDecision.REJECTED
+    assert artifacts.approval is None
+
+
+def test_gate_approves_when_target_valid_at_threshold(tmp_path: Path) -> None:
+    payload = copy.deepcopy(load_fixture("item_multiget_success.json"))
+    # Force 4 items to fail target → 16/20 valid (threshold).
+    for entry in payload[:4]:
+        for attribute in entry["body"]["attributes"]:
+            if attribute["id"] == "OPERATION":
+                attribute["value_name"] = "Venta"
+                attribute["value_id"] = "242073"
+    anonymous = _StubClient(
+        search_handler=lambda site_id, params: _successful_search(),
+        items_response=FakeResponse(json_data=payload),
+        description_response=_description(),
+        site_categories_response=_site_categories(),
+    )
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path),
+        anonymous,
+        authenticated_client=None,
+        workdir=tmp_path / "gate",
+    )
+
+    assert report.target_valid_coverage.present == 16
+    assert report.decision is SourceGateDecision.APPROVED
+    assert artifacts.approval is not None
+
+
+def test_gate_rejected_even_when_separate_metrics_meet_threshold(tmp_path: Path) -> None:
+    payload = copy.deepcopy(load_fixture("item_multiget_success.json"))
+    # First 5: sale (fails operation, keeps location + type presence).
+    for entry in payload[:5]:
+        for attribute in entry["body"]["attributes"]:
+            if attribute["id"] == "OPERATION":
+                attribute["value_name"] = "Venta"
+                attribute["value_id"] = "242073"
+    # Different 5 with valid operation but outside Montevideo (fails location).
+    for entry in payload[5:10]:
+        entry["body"]["location"] = {"state": {"name": "Canelones"}}
+    anonymous = _StubClient(
+        search_handler=lambda site_id, params: _successful_search(),
+        items_response=FakeResponse(json_data=payload),
+        description_response=_description(),
+        site_categories_response=_site_categories(),
+    )
+
+    report, _ = run_source_gate(
+        _config(tmp_path),
+        anonymous,
+        authenticated_client=None,
+        workdir=tmp_path / "gate",
+    )
+
+    # Separate metrics still look OK: operation_value 15/20, location 15/20.
+    # But target combined is only 10/20 → REJECTED.
+    assert report.operation_value_coverage.present == 15
+    assert report.montevideo_coverage.present == 15
+    assert report.target_valid_coverage.present == 10
+    assert report.decision is SourceGateDecision.REJECTED
 
 
 def test_gate_inconclusive_when_only_apartment_verified(tmp_path: Path) -> None:

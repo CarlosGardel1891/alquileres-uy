@@ -64,6 +64,25 @@ def test_build_initial_plan_returns_two_segments_only_when_both_categories_prese
     assert property_types == ["apartment", "house"]
 
 
+def test_build_initial_plan_ignores_extras_in_contract():
+    # A tampered contract that added an extra property type still
+    # produces exactly the required two segments, because the plan only
+    # iterates over REQUIRED_PROPERTY_TYPES.
+    contract = approved_contract(
+        category_ids={
+            "apartment": "MLU_TEST_APARTMENT",
+            "house": "MLU_TEST_HOUSE",
+            "garage": "MLU_TEST_GARAGE",
+        }
+    )
+    segments = build_initial_plan(contract)
+    property_types = sorted(segment.property_type for segment in segments)
+    assert property_types == ["apartment", "house"]
+    category_ids_in_plan = {segment.property_type: segment.category_id for segment in segments}
+    assert "garage" not in category_ids_in_plan.values()
+    assert "MLU_TEST_GARAGE" not in {s.category_id for s in segments}
+
+
 def test_query_plan_module_has_no_hardcoded_category_constants():
     for banned in ("CATEGORY_APARTMENT", "CATEGORY_HOUSE"):
         assert not hasattr(
