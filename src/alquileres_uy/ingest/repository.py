@@ -49,7 +49,8 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         reported_total INTEGER,
         pages_downloaded INTEGER NOT NULL DEFAULT 0,
         results_received INTEGER NOT NULL DEFAULT 0,
-        error_message TEXT
+        error_message TEXT,
+        repeated_page_detected INTEGER NOT NULL DEFAULT 0
     )
     """,
     """
@@ -211,6 +212,7 @@ class IngestionRepository:
         pages_downloaded: int = 0,
         results_received: int = 0,
         error_message: str | None = None,
+        repeated_page_detected: bool = False,
     ) -> None:
         with self._transaction() as cursor:
             cursor.execute(
@@ -218,9 +220,9 @@ class IngestionRepository:
                 INSERT INTO queries (
                     query_id, run_id, segment_key, parameters_json, status,
                     reported_total, pages_downloaded, results_received,
-                    error_message
+                    error_message, repeated_page_detected
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     query_id,
@@ -232,6 +234,7 @@ class IngestionRepository:
                     pages_downloaded,
                     results_received,
                     error_message,
+                    1 if repeated_page_detected else 0,
                 ),
             )
 

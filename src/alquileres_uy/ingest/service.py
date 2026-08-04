@@ -3,10 +3,13 @@
 The service ties together the query plan, HTTP client, filesystem writer
 and SQLite repository. It:
 
-1. probes each seed segment;
-2. splits segments whose reported total exceeds the safe cap;
-3. paginates every leaf segment up to :data:`MAX_SEARCH_OFFSET`;
-4. deduplicates item IDs globally;
+1. reads the categories to use from an :class:`ApprovedSourceContract`;
+2. probes each seed segment and splits it by price/bedrooms when its
+   reported total exceeds the safe cap;
+3. paginates every leaf segment up to :data:`MAX_SEARCH_OFFSET`,
+   stopping early if a page's ID set repeats within the segment;
+4. deduplicates item IDs globally and remembers, for each ID, the query
+   and page that discovered it;
 5. downloads item details in multiget batches of 20;
 6. downloads descriptions;
 7. writes a manifest and summary for the run.
@@ -34,8 +37,10 @@ from .config import (
 from .errors import IngestionError
 from .filesystem import append_jsonl, atomic_write_json
 from .models import (
+    ApprovedSourceContract,
     CandidateStatus,
     FieldCoverage,
+    ItemDiscovery,
     QuerySegment,
     QueryStatus,
     RunStatus,
@@ -44,6 +49,7 @@ from .query_plan import (
     SAFE_SEGMENT_LIMIT,
     build_initial_plan,
     classify_candidate,
+    page_fingerprint,
     plan_hash,
     split_by_bedrooms,
     split_by_price,
@@ -77,11 +83,13 @@ class _PlanEntry:
 class _RunState:
     seen_ids: set[str] = field(default_factory=set)
     unique_ids: list[str] = field(default_factory=list)
+    discoveries: dict[str, ItemDiscovery] = field(default_factory=dict)
     duplicate_ids_across_queries: int = 0
     search_results_received: int = 0
     queries_planned: int = 0
     queries_completed: int = 0
     queries_failed: int = 0
+    repeated_pages_detected: int = 0
     items_requested: int = 0
     items_downloaded: int = 0
     items_failed: int = 0
@@ -97,16 +105,18 @@ class _RunState:
 
 
 class IngestionService:
-    """Coordinates one ingestion run."""
+    """Coordinates one ingestion run against an approved source contract."""
 
     def __init__(
         self,
         config: IngestionConfig,
+        contract: ApprovedSourceContract,
         client_factory: Callable[[IngestionConfig], MercadoLibreClient] | None = None,
         repository_factory: Callable[[Path], IngestionRepository] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._config = config
+        self._contract = contract
         self._client_factory = client_factory or (lambda cfg: MercadoLibreClient(cfg))
         self._repository_factory = repository_factory or IngestionRepository
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -114,10 +124,12 @@ class IngestionService:
     # -- entry points ---------------------------------------------------
 
     def dry_run(self) -> dict[str, Any]:
-        segments = build_initial_plan(site_id=self._config.site_id)
+        segments = build_initial_plan(self._contract)
         return {
             "dry_run": True,
-            "site_id": self._config.site_id,
+            "site_id": self._contract.site_id,
+            "source": self._contract.source,
+            "gate_approval_hash": self._contract.report_sha256,
             "seed_segments": [segment.as_dict() for segment in segments],
             "seed_segment_count": len(segments),
             "query_plan_hash": plan_hash(segments),
@@ -131,7 +143,7 @@ class IngestionService:
         started_at = self._clock()
         run_id = uuid.uuid4().hex
         workdir = self._prepare_workdir(started_at, run_id)
-        segments = build_initial_plan(site_id=self._config.site_id)
+        segments = build_initial_plan(self._contract)
         query_plan_hash = plan_hash(segments)
 
         repository = self._repository_factory(self._config.database_path)
@@ -235,6 +247,8 @@ class IngestionService:
             results_received = 0
             reported_total: int | None = None
             error_message: str | None = None
+            repeated_in_segment = False
+            segment_fingerprints: set[str] = set()
 
             try:
                 for page_index in range(1, MAX_PAGES_PER_SEGMENT + 1):
@@ -252,6 +266,23 @@ class IngestionService:
                     ids_on_page = self._extract_ids(page_data)
                     results_received += len(ids_on_page)
 
+                    if ids_on_page:
+                        fingerprint = page_fingerprint(ids_on_page)
+                        if fingerprint in segment_fingerprints:
+                            repeated_in_segment = True
+                            state.repeated_pages_detected += 1
+                            logger.warning(
+                                "repeated page detected — stopping segment",
+                                extra={
+                                    "query_id": query_id,
+                                    "segment_key": entry.segment.segment_key,
+                                    "page_index": page_index,
+                                    "fingerprint": fingerprint,
+                                },
+                            )
+                            break
+                        segment_fingerprints.add(fingerprint)
+
                     if not entry.is_leaf and reported_total and reported_total > SAFE_SEGMENT_LIMIT:
                         splits = self._split_segment(entry)
                         if splits:
@@ -264,6 +295,13 @@ class IngestionService:
                             continue
                         state.seen_ids.add(item_id)
                         state.unique_ids.append(item_id)
+                        state.discoveries[item_id] = ItemDiscovery(
+                            item_id=item_id,
+                            query_id=query_id,
+                            segment_key=entry.segment.segment_key,
+                            position=len(state.unique_ids),
+                            page_index=page_index,
+                        )
                         if len(state.unique_ids) >= self._config.max_items:
                             break
 
@@ -313,6 +351,7 @@ class IngestionService:
                 pages_downloaded=pages_downloaded,
                 results_received=results_received,
                 error_message=error_message,
+                repeated_page_detected=repeated_in_segment,
             )
 
     def _segment_to_search_params(self, segment: QuerySegment, offset: int) -> dict[str, Any]:
@@ -378,9 +417,10 @@ class IngestionService:
         items_dir = workdir / "items"
         errors_path = workdir / "errors" / "errors.jsonl"
         state.items_requested = len(state.unique_ids)
+        # Sort IDs to form deterministic batches; the on-record position
+        # still comes from the discovery order, not from this sort.
         ordered_ids = sorted(state.unique_ids)
         batch_index = 0
-        position = 0
 
         for start in range(0, len(ordered_ids), MAX_MULTIGET_BATCH_SIZE):
             batch_ids = ordered_ids[start : start + MAX_MULTIGET_BATCH_SIZE]
@@ -424,22 +464,24 @@ class IngestionService:
             for envelope in batch_data:
                 if not isinstance(envelope, dict):
                     continue
-                item_id = envelope.get("id") or (
-                    envelope.get("body", {}).get("id")
-                    if isinstance(envelope.get("body"), dict)
-                    else None
-                )
                 code = envelope.get("code")
                 body = envelope.get("body")
                 if code != 200 or not isinstance(body, dict):
                     state.items_failed += 1
                     continue
-                item_id = item_id or body.get("id")
+                item_id = envelope.get("id") or body.get("id")
                 if not isinstance(item_id, str):
                     continue
+                discovery = state.discoveries.get(item_id)
+                if discovery is None:
+                    # Item came back but was never discovered — extremely
+                    # unusual; keep it out of run_items to preserve the
+                    # first-discovery invariant.
+                    state.items_failed += 1
+                    continue
+
                 state.items_downloaded += 1
-                position += 1
-                candidate_status_str, reason = classify_candidate(body)
+                candidate_status_str, reason = classify_candidate(body, self._contract)
                 candidate_status = CandidateStatus(candidate_status_str)
                 if candidate_status is CandidateStatus.CANDIDATE:
                     state.candidate_items += 1
@@ -462,9 +504,9 @@ class IngestionService:
                 repository.record_run_item(
                     run_id=run_id,
                     item_id=item_id,
-                    query_id=None,
+                    query_id=discovery.query_id,
                     raw_path=str(batch_path.relative_to(workdir)),
-                    position=position,
+                    position=discovery.position,
                     candidate_status=candidate_status,
                     exclusion_reason=reason,
                 )
@@ -563,6 +605,7 @@ class IngestionService:
             "queries_planned": state.queries_planned,
             "queries_completed": state.queries_completed,
             "queries_failed": state.queries_failed,
+            "repeated_pages_detected": state.repeated_pages_detected,
             "search_results_received": state.search_results_received,
             "unique_ids_found": len(state.unique_ids),
             "duplicate_ids_across_queries": state.duplicate_ids_across_queries,
@@ -582,6 +625,7 @@ class IngestionService:
         logger.info(
             "Ingesta completada\n"
             "Consultas ejecutadas: %s/%s\n"
+            "Páginas repetidas detectadas: %s\n"
             "Resultados recibidos: %s\n"
             "IDs únicos: %s\n"
             "Duplicados entre segmentos: %s\n"
@@ -592,6 +636,7 @@ class IngestionService:
             "Duración: %s",
             summary["queries_completed"],
             summary["queries_planned"],
+            summary["repeated_pages_detected"],
             summary["search_results_received"],
             summary["unique_ids_found"],
             summary["duplicate_ids_across_queries"],
