@@ -1,0 +1,36 @@
+{
+  "site_id": "MLU",
+  "paging": {"total": 3200, "offset": 0, "limit": 20, "primary_results": 20},
+  "results": [
+    {"id": "MLU100001", "title": "Apartamento en alquiler 1", "price": 800, "currency_id": "USD"},
+    {"id": "MLU100002", "title": "Apartamento en alquiler 2", "price": 850, "currency_id": "USD"},
+    {"id": "MLU100003", "title": "Apartamento en alquiler 3", "price": 900, "currency_id": "USD"},
+    {"id": "MLU100004", "title": "Apartamento en alquiler 4", "price": 950, "currency_id": "USD"},
+    {"id": "MLU100005", "title": "Apartamento en alquiler 5", "price": 1000, "currency_id": "USD"},
+    {"id": "MLU100006", "title": "Apartamento en alquiler 6", "price": 1050, "currency_id": "USD"},
+    {"id": "MLU100007", "title": "Apartamento en alquiler 7", "price": 1100, "currency_id": "USD"},
+    {"id": "MLU100008", "title": "Apartamento en alquiler 8", "price": 1150, "currency_id": "USD"},
+    {"id": "MLU100009", "title": "Apartamento en alquiler 9", "price": 1200, "currency_id": "USD"},
+    {"id": "MLU100010", "title": "Apartamento en alquiler 10", "price": 1250, "currency_id": "USD"},
+    {"id": "MLU100011", "title": "Apartamento en alquiler 11", "price": 1300, "currency_id": "USD"},
+    {"id": "MLU100012", "title": "Apartamento en alquiler 12", "price": 1350, "currency_id": "USD"},
+    {"id": "MLU100013", "title": "Apartamento en alquiler 13", "price": 1400, "currency_id": "USD"},
+    {"id": "MLU100014", "title": "Apartamento en alquiler 14", "price": 1450, "currency_id": "USD"},
+    {"id": "MLU100015", "title": "Apartamento en alquiler 15", "price": 1500, "currency_id": "USD"},
+    {"id": "MLU100016", "title": "Apartamento en alquiler 16", "price": 1550, "currency_id": "USD"},
+    {"id": "MLU100017", "title": "Apartamento en alquiler 17", "price": 1600, "currency_id": "USD"},
+    {"id": "MLU100018", "title": "Apartamento en alquiler 18", "price": 1650, "currency_id": "USD"},
+    {"id": "MLU100019", "title": "Apartamento en alquiler 19", "price": 1700, "currency_id": "USD"},
+    {"id": "MLU100020", "title": "Apartamento en alquiler 20", "price": 1750, "currency_id": "USD"}
+  ],
+  "available_filters": [
+    {"id": "OPERATION", "name": "Operación", "type": "STRING"},
+    {"id": "PROPERTY_TYPE", "name": "Tipo de propiedad", "type": "STRING"},
+    {"id": "BEDROOMS", "name": "Dormitorios", "type": "NUMBER"},
+    {"id": "price", "name": "Precio", "type": "range"}
+  ],
+  "available_sorts": [
+    {"id": "price_asc", "name": "Menor precio"},
+    {"id": "price_desc", "name": "Mayor precio"}
+  ]
+}

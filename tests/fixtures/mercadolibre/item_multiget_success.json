@@ -1,0 +1,1162 @@
+[
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "2",
+          "value_name": "2"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "42 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-02-15T09:00:00.000Z",
+      "id": "MLU100001",
+      "last_updated": "2026-02-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100001",
+      "price": 850,
+      "title": "Apartamento en alquiler 1"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "3",
+          "value_name": "3"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "44 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-03-15T09:00:00.000Z",
+      "id": "MLU100002",
+      "last_updated": "2026-03-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100002",
+      "price": 900,
+      "title": "Apartamento en alquiler 2"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "1",
+          "value_name": "1"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "46 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-04-15T09:00:00.000Z",
+      "id": "MLU100003",
+      "last_updated": "2026-04-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100003",
+      "price": 950,
+      "title": "Apartamento en alquiler 3"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "2",
+          "value_name": "2"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "48 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-05-15T09:00:00.000Z",
+      "id": "MLU100004",
+      "last_updated": "2026-05-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100004",
+      "price": 1000,
+      "title": "Apartamento en alquiler 4"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "3",
+          "value_name": "3"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "50 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-06-15T09:00:00.000Z",
+      "id": "MLU100005",
+      "last_updated": "2026-06-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100005",
+      "price": 1050,
+      "title": "Apartamento en alquiler 5"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "1",
+          "value_name": "1"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "52 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-01-15T09:00:00.000Z",
+      "id": "MLU100006",
+      "last_updated": "2026-01-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100006",
+      "price": 1100,
+      "title": "Apartamento en alquiler 6"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "2",
+          "value_name": "2"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "54 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-02-15T09:00:00.000Z",
+      "id": "MLU100007",
+      "last_updated": "2026-02-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100007",
+      "price": 1150,
+      "title": "Apartamento en alquiler 7"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "3",
+          "value_name": "3"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "56 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-03-15T09:00:00.000Z",
+      "id": "MLU100008",
+      "last_updated": "2026-03-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100008",
+      "price": 1200,
+      "title": "Apartamento en alquiler 8"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "1",
+          "value_name": "1"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "58 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-04-15T09:00:00.000Z",
+      "id": "MLU100009",
+      "last_updated": "2026-04-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100009",
+      "price": 1250,
+      "title": "Apartamento en alquiler 9"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "2",
+          "value_name": "2"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "60 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-05-15T09:00:00.000Z",
+      "id": "MLU100010",
+      "last_updated": "2026-05-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100010",
+      "price": 1300,
+      "title": "Apartamento en alquiler 10"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "3",
+          "value_name": "3"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "62 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-06-15T09:00:00.000Z",
+      "id": "MLU100011",
+      "last_updated": "2026-06-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100011",
+      "price": 1350,
+      "title": "Apartamento en alquiler 11"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "1",
+          "value_name": "1"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "64 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-01-15T09:00:00.000Z",
+      "id": "MLU100012",
+      "last_updated": "2026-01-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100012",
+      "price": 1400,
+      "title": "Apartamento en alquiler 12"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "2",
+          "value_name": "2"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "66 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-02-15T09:00:00.000Z",
+      "id": "MLU100013",
+      "last_updated": "2026-02-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100013",
+      "price": 1450,
+      "title": "Apartamento en alquiler 13"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "3",
+          "value_name": "3"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "68 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-03-15T09:00:00.000Z",
+      "id": "MLU100014",
+      "last_updated": "2026-03-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100014",
+      "price": 1500,
+      "title": "Apartamento en alquiler 14"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "1",
+          "value_name": "1"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "70 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-04-15T09:00:00.000Z",
+      "id": "MLU100015",
+      "last_updated": "2026-04-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100015",
+      "price": 1550,
+      "title": "Apartamento en alquiler 15"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "2",
+          "value_name": "2"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "72 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-05-15T09:00:00.000Z",
+      "id": "MLU100016",
+      "last_updated": "2026-05-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100016",
+      "price": 1600,
+      "title": "Apartamento en alquiler 16"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "3",
+          "value_name": "3"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "74 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-06-15T09:00:00.000Z",
+      "id": "MLU100017",
+      "last_updated": "2026-06-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100017",
+      "price": 1650,
+      "title": "Apartamento en alquiler 17"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "1",
+          "value_name": "1"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "76 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-01-15T09:00:00.000Z",
+      "id": "MLU100018",
+      "last_updated": "2026-01-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100018",
+      "price": 1700,
+      "title": "Apartamento en alquiler 18"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "2",
+          "value_name": "2"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "78 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-02-15T09:00:00.000Z",
+      "id": "MLU100019",
+      "last_updated": "2026-02-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100019",
+      "price": 1750,
+      "title": "Apartamento en alquiler 19"
+    },
+    "code": 200
+  },
+  {
+    "body": {
+      "attributes": [
+        {
+          "id": "OPERATION",
+          "name": "Operación",
+          "value_id": "242075",
+          "value_name": "Alquiler"
+        },
+        {
+          "id": "PROPERTY_TYPE",
+          "name": "Tipo de propiedad",
+          "value_id": "242060",
+          "value_name": "Apartamento"
+        },
+        {
+          "id": "BEDROOMS",
+          "name": "Dormitorios",
+          "value_id": "3",
+          "value_name": "3"
+        },
+        {
+          "id": "TOTAL_AREA",
+          "name": "Superficie total",
+          "value_id": null,
+          "value_name": "80 m²"
+        },
+        {
+          "id": "FULL_BATHROOMS",
+          "name": "Baños",
+          "value_id": "1",
+          "value_name": "1"
+        }
+      ],
+      "category_id": "MLU1466",
+      "condition": "not_specified",
+      "currency_id": "USD",
+      "date_created": "2026-03-15T09:00:00.000Z",
+      "id": "MLU100020",
+      "last_updated": "2026-03-20T10:00:00.000Z",
+      "location": {
+        "city": {
+          "name": "Pocitos"
+        },
+        "neighborhood": {
+          "name": "Pocitos"
+        },
+        "state": {
+          "id": "TUxVUE1PTjkwNTU3",
+          "name": "Montevideo"
+        }
+      },
+      "permalink": "https://articulo.mercadolibre.com.uy/MLU100020",
+      "price": 1800,
+      "title": "Apartamento en alquiler 20"
+    },
+    "code": 200
+  }
+]
