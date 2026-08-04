@@ -25,7 +25,7 @@ def write_manifest(
     requests_per_second: float,
     request_timeout_seconds: float,
     token_used: bool,
-    files: list[str],
+    files: list[dict[str, str]],
 ) -> Path:
     manifest = {
         "run_id": run_id,
@@ -42,7 +42,7 @@ def write_manifest(
             "timeout_seconds": request_timeout_seconds,
         },
         "authentication": {"token_used": token_used},
-        "files": sorted(files),
+        "files": sorted(files, key=lambda entry: entry.get("path", "")),
         "summary_path": "ingestion_summary.json",
     }
     path, _ = atomic_write_json(Path(workdir) / "manifest.json", manifest)

@@ -6,6 +6,7 @@ the rest of the tooling but is trivial to spot in a review.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -201,6 +202,7 @@ def main() -> None:
             encoding="utf-8",
         )
 
+    file_entries = _describe_files(root)
     manifest = {
         "run_id": "fixture-run-001",
         "source": "mercadolibre",
@@ -212,7 +214,7 @@ def main() -> None:
         "query_plan_hash": "fixture-hash",
         "config": {"max_items": 5000, "requests_per_second": 2, "timeout_seconds": 20},
         "authentication": {"token_used": False},
-        "files": [],
+        "files": file_entries,
         "summary_path": "ingestion_summary.json",
     }
     (root / "manifest.json").write_text(
@@ -234,6 +236,21 @@ def main() -> None:
     )
 
     print(f"generated {len(items)} items across 2 batches")
+
+
+def _describe_files(root: Path) -> list[dict[str, str]]:
+    """Build manifest.files entries with SHA-256 for every JSON under the run."""
+    entries: list[dict[str, str]] = []
+    for subdir, kind in (("items", "item_batch"), ("descriptions", "description")):
+        for candidate in sorted((root / subdir).glob("*.json")):
+            entries.append(
+                {
+                    "path": f"{subdir}/{candidate.name}",
+                    "kind": kind,
+                    "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
+                }
+            )
+    return entries
 
 
 if __name__ == "__main__":
