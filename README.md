@@ -2,7 +2,7 @@
 
 Pipeline end-to-end para ingesta, procesamiento y predicción de precios de alquileres mensuales en Montevideo.
 
-> Estado: Fase 0 completada. Fase 1 (ingesta MercadoLibre) en curso. Todavía no existe un modelo entrenado ni una demo desplegada.
+> Estado: Fase 0 completada. Fase 1 (ingesta MercadoLibre) **detenida por bloqueo del source gate** (ver más abajo). Todavía no existe un modelo entrenado ni una demo desplegada.
 
 ## Alcance
 
@@ -173,6 +173,14 @@ La ingesta es idempotente respecto a `item_id`. Correr dos veces con el mismo pl
 ### GitHub Actions
 
 GitHub Actions **no** ejecuta la ingesta ni el source gate. Sólo instala dependencias y corre tests con fixtures locales (`ruff`, `pytest`, `pre-commit`, `build`).
+
+### Resultado del source gate (2026-08-04)
+
+- **Decisión:** `INCONCLUSIVE` (exit code `3`).
+- **Token usado:** no.
+- **Motivo:** MercadoLibre respondió `403 forbidden` (con `blocked_by: PolicyAgent`) a `GET /sites/MLU/search` y otros endpoints del sitio sin token. El endpoint puntual `/categories/{id}` sí responde `200`, lo que confirma que sólo los recursos del sitio están cerrados anónimamente.
+- **Consecuencia:** la ingesta masiva **no** se ejecutó. La fase se detiene y espera decisión (obtener token oficial de MercadoLibre, priorizar otra fuente, o alcance reducido).
+- **Evidencia detallada:** `docs/mercadolibre-source-contract.md` (secciones 3 y 9).
 
 ## Fases del proyecto
 
