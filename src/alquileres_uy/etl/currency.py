@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,10 @@ from .models import ALLOWED_CURRENCIES
 
 class InvalidExchangeRate(ValueError):
     """Raised when an exchange rate configuration cannot be trusted."""
+
+
+class ExchangeRateModeMismatch(InvalidExchangeRate):
+    """Raised when the exchange rate data_mode does not match the ETL data_mode."""
 
 
 @dataclass(frozen=True)
@@ -27,6 +31,19 @@ class ExchangeRate:
     source: str
     data_mode: str
     retrieved_at: str
+
+
+def ensure_mode_consistent(rate: ExchangeRate, config_data_mode: str) -> None:
+    """Assert ``rate.data_mode == config_data_mode`` — else raise."""
+    if rate.data_mode != config_data_mode:
+        raise ExchangeRateModeMismatch(
+            f"exchange rate data_mode {rate.data_mode!r} does not match "
+            f"ETL data_mode {config_data_mode!r}"
+        )
+    if config_data_mode == "real" and rate.source.strip().lower() == "fixture":
+        raise ExchangeRateModeMismatch(
+            "real-mode ETL refuses an exchange rate whose source is 'fixture'"
+        )
 
 
 def load_exchange_rate(path: Path) -> ExchangeRate:
@@ -78,6 +95,14 @@ def load_exchange_rate(path: Path) -> ExchangeRate:
     retrieved_at = raw.get("retrieved_at")
     if not isinstance(retrieved_at, str):
         raise InvalidExchangeRate("retrieved_at is required and must be a string")
+    try:
+        parsed_retrieved = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise InvalidExchangeRate(f"retrieved_at is not ISO-8601: {retrieved_at!r}") from exc
+    if parsed_retrieved.tzinfo is None:
+        raise InvalidExchangeRate(
+            f"retrieved_at must include timezone (Z or offset), got {retrieved_at!r}"
+        )
 
     return ExchangeRate(
         base_currency=base_currency,
