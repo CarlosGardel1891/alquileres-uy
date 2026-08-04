@@ -10,9 +10,12 @@ from typing import Any
 from .normalization import normalize_key, normalize_text
 
 _NUMBER_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
-_UNIT_TOKENS = frozenset({"m2", "m²", "sqm"})
+_AREA_UNIT_ALIASES: frozenset[str] = frozenset(
+    {"m2", "m²", "sqm", "metro cuadrado", "metros cuadrados"}
+)
 _EN_DASH = chr(0x2013)  # en dash
 _RANGE_MARKERS = ("-", _EN_DASH, " a ", " al ", " to ")
+AREA_ATTRIBUTE_IDS: frozenset[str] = frozenset({"TOTAL_AREA", "COVERED_AREA", "SURFACE_TOTAL"})
 
 ATTRIBUTE_MAP: dict[str, str] = {
     "BEDROOMS": "bedrooms",
@@ -62,44 +65,37 @@ def attribute_value(attribute: dict[str, Any] | None) -> Any:
     return None
 
 
-def parse_number(raw: Any) -> tuple[Decimal | None, str | None]:
-    """Return ``(decimal, error_code_or_None)`` for a numeric attribute value.
+def parse_plain_number(raw: Any) -> tuple[Decimal | None, str | None]:
+    """Parse a count-like attribute (bedrooms, bathrooms, floor, ...).
 
-    Handles ints, floats, decimals, strings like ``"65"``, ``"65.5"``,
-    ``"65,5"``, ``"65 m²"``, ``"65 m2"``, and MercadoLibre-style
-    ``value_struct = {"number": ..., "unit": "..."}`` payloads. Rejects
-    ranges (``"65-70"``) and free-form strings like ``"aprox 65"``.
+    Accepts ints/floats/Decimals, numeric strings with comma or dot
+    decimal separators, and ``value_struct = {"number": ...}`` payloads
+    (the unit, if any, is ignored — this parser is for counts, not
+    measurements). Rejects ranges (``"65-70"``) and free-form strings.
     """
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return None, None
-    if isinstance(raw, bool):  # bool is int subclass; ignore
+    if isinstance(raw, bool):
         return None, "invalid_number"
     if isinstance(raw, int | float | Decimal):
         try:
-            value = Decimal(str(raw))
+            return Decimal(str(raw)), None
         except InvalidOperation:
             return None, "invalid_number"
-        return value, None
     if isinstance(raw, dict):
         number = raw.get("number")
         if number is None:
             return None, "invalid_number"
         try:
-            value = Decimal(str(number))
+            return Decimal(str(number)), None
         except (InvalidOperation, TypeError, ValueError):
             return None, "invalid_number"
-        return value, None
     if not isinstance(raw, str):
         return None, "invalid_number"
-
     text = raw.strip().lower()
     for marker in _RANGE_MARKERS:
         if marker in text and not text.startswith("-"):
             return None, "invalid_range"
-    for token in _UNIT_TOKENS:
-        if text.endswith(token):
-            text = text[: -len(token)].strip()
-            break
     text = text.replace(",", ".")
     if not _NUMBER_RE.match(text):
         return None, "invalid_number"
@@ -107,6 +103,67 @@ def parse_number(raw: Any) -> tuple[Decimal | None, str | None]:
         return Decimal(text), None
     except InvalidOperation:
         return None, "invalid_number"
+
+
+def parse_area(raw: Any) -> tuple[Decimal | None, str | None]:
+    """Parse a surface attribute. Only m² / m2 / sqm / metros cuadrados accepted.
+
+    Ranges, ft², sqft and other units return ``(None, "unsupported_area_unit")``.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, None
+    if isinstance(raw, bool):
+        return None, "invalid_number"
+    if isinstance(raw, int | float | Decimal):
+        try:
+            return Decimal(str(raw)), None
+        except InvalidOperation:
+            return None, "invalid_number"
+    if isinstance(raw, dict):
+        number = raw.get("number")
+        unit = raw.get("unit")
+        if number is None:
+            return None, "invalid_number"
+        if unit is not None and not _is_area_unit(unit):
+            return None, "unsupported_area_unit"
+        try:
+            return Decimal(str(number)), None
+        except (InvalidOperation, TypeError, ValueError):
+            return None, "invalid_number"
+    if not isinstance(raw, str):
+        return None, "invalid_number"
+    text = raw.strip().lower()
+    for marker in _RANGE_MARKERS:
+        if marker in text and not text.startswith("-"):
+            return None, "invalid_range"
+    unit_found = False
+    for alias in sorted(_AREA_UNIT_ALIASES, key=len, reverse=True):
+        if text.endswith(alias):
+            text = text[: -len(alias)].strip()
+            unit_found = True
+            break
+    if not unit_found and any(
+        text.endswith(bad) for bad in ("ft2", "ft²", "sqft", "hectárea", "hectareas", "ha")
+    ):
+        return None, "unsupported_area_unit"
+    text = text.replace(",", ".")
+    if not _NUMBER_RE.match(text):
+        return None, "invalid_number"
+    try:
+        return Decimal(text), None
+    except InvalidOperation:
+        return None, "invalid_number"
+
+
+def _is_area_unit(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    key = value.strip().lower()
+    return key in _AREA_UNIT_ALIASES
+
+
+# Backward-compatible alias so callers can still say parse_number(...).
+parse_number = parse_plain_number
 
 
 def parse_bool(value: Any) -> bool | None:
