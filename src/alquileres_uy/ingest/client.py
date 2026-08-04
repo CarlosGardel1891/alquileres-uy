@@ -202,32 +202,43 @@ class MercadoLibreClient:
     def _raise_for_status(self, response: Response) -> Response:
         code = response.status_code
         url = redact_url(response.url)
-        message = self._extract_message(response)
+        body, message = self._extract_body_and_message(response)
         if code == 400:
-            raise BadRequestError(code, message, url=url)
+            raise BadRequestError(code, message, url=url, response_body=body)
         if code == 401:
-            raise AuthenticationError(code, message, url=url)
+            raise AuthenticationError(code, message, url=url, response_body=body)
         if code == 403:
-            raise AuthorizationError(code, message, url=url)
+            raise AuthorizationError(code, message, url=url, response_body=body)
         if code == 404:
-            raise NotFoundError(code, message, url=url)
+            raise NotFoundError(code, message, url=url, response_body=body)
         if code == 429:
-            raise RateLimitError(code, message, url=url)
+            raise RateLimitError(code, message, url=url, response_body=body)
         if 400 <= code < 500:
-            raise ClientHttpError(code, message, url=url)
+            raise ClientHttpError(code, message, url=url, response_body=body)
         if 500 <= code < 600:
-            raise ServerHttpError(code, message, url=url)
-        raise HttpError(code, message, url=url)
+            raise ServerHttpError(code, message, url=url, response_body=body)
+        raise HttpError(code, message, url=url, response_body=body)
 
     @staticmethod
-    def _extract_message(response: Response) -> str:
+    def _extract_body_and_message(response: Response) -> tuple[Any, str]:
+        """Return ``(body, message)`` for an error response.
+
+        ``body`` is the parsed JSON payload when the response is valid
+        JSON, or a truncated string preview when it is not, so probe
+        artifacts have something concrete to persist.
+        """
         try:
             data = response.json()
         except ValueError:
-            return response.text[:200] or response.reason or ""
+            preview = (response.text or response.reason or "")[:200]
+            return preview, preview
+        message: str = ""
         if isinstance(data, dict):
             for key in ("message", "error", "detail"):
                 value = data.get(key)
                 if isinstance(value, str):
-                    return value
-        return str(data)[:200]
+                    message = value
+                    break
+        if not message:
+            message = str(data)[:200]
+        return data, message

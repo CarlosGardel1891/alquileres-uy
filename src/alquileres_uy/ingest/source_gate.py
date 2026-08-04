@@ -7,11 +7,19 @@ optional authenticated one that only runs if the anonymous probe hits
 client's session is reused across roles, so the anonymous evidence
 cannot be contaminated by a stale bearer token.
 
-When the gate reaches ``APPROVED`` it emits an accompanying
-``source_gate_approval.json`` artifact that the ingestion CLI will
-require. The approval file records the verified category IDs and the
-SHA-256 of the coverage report — the ingestion refuses to start if
-either of those checks does not hold.
+Every search probe — success, 401/403, or transport error — is
+persisted as a wrapped ``{request, response}`` artifact under
+``search_no_auth.json`` / ``search_with_auth.json``. The artifacts are
+sanitized before writing so tokens can never leak.
+
+``token_used`` is set the moment the authenticated call is *executed*,
+regardless of whether it succeeded, so the report faithfully answers
+"did the pipeline actually send a bearer token?".
+
+When the gate reaches ``APPROVED`` it also emits
+``source_gate_approval.json`` which the ingestion CLI will require. The
+gate can only approve when **both** required property categories
+(``apartment`` and ``house``) were verified against the live site tree.
 """
 
 from __future__ import annotations
@@ -30,8 +38,13 @@ from .errors import (
     HttpError,
     IngestionError,
 )
-from .filesystem import atomic_write_json
-from .models import FieldCoverage, SourceGateDecision, SourceGateReport
+from .filesystem import atomic_write_json, sanitize_for_artifact
+from .models import (
+    REQUIRED_PROPERTY_TYPES,
+    FieldCoverage,
+    SourceGateDecision,
+    SourceGateReport,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +61,8 @@ SAMPLE_SIZE = 20
 MIN_ESSENTIAL_HITS = 16
 MIN_DATE_HITS = 16
 
+# Maps the *internal* property_type key (never translated) to the set of
+# lowercase MercadoLibre category names that identify it.
 PROPERTY_TYPE_LABELS: dict[str, tuple[str, ...]] = {
     "apartment": ("apartamento", "apartamentos", "apartment", "apartments"),
     "house": ("casa", "casas", "house", "houses"),
@@ -78,8 +93,8 @@ def run_source_gate(
 
     ``anonymous_client`` is always used first. ``authenticated_client``
     is invoked only when the anonymous probe returned ``401`` or ``403``
-    and a token was actually available — the caller is responsible for
-    constructing it with the correct config.
+    and it is not ``None`` — the caller is responsible for constructing
+    it with the correct config.
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -88,37 +103,72 @@ def run_source_gate(
     artifacts = SourceGateArtifacts(descriptions_dir=descriptions_dir)
     notes: list[str] = []
 
+    search_endpoint = f"/sites/{config.site_id}/search"
     search_params = _initial_search_params(config)
+    known_token = _extract_token(authenticated_client)
 
     active_client: MercadoLibreClient | None = None
     token_used = False
     search_data: dict[str, Any] | None = None
     reported_total: int | None = None
 
-    try:
-        response = anonymous_client.search_items(config.site_id, params=search_params)
-        search_data = _dict_json(response)
-        artifacts.search_no_auth, _ = atomic_write_json(
-            workdir / "search_no_auth.json", search_data
-        )
+    anon_attempt = _probe(anonymous_client, config.site_id, search_params, authenticated=False)
+    artifacts.search_no_auth = _write_probe_artifact(
+        workdir / "search_no_auth.json",
+        endpoint=search_endpoint,
+        attempt=anon_attempt,
+        token=known_token,
+    )
+    # Anonymous body is only trusted as ingestion input when it came from
+    # a 2xx response; error bodies are evidence, not signal.
+    if (
+        isinstance(anon_attempt.body, dict)
+        and anon_attempt.status_code
+        and 200 <= anon_attempt.status_code < 300
+    ):
+        search_data = anon_attempt.body
         active_client = anonymous_client
-    except (AuthenticationError, AuthorizationError) as exc:
-        notes.append(f"anonymous search returned {exc.status_code}")
-        if authenticated_client is None:
-            notes.append("no MELI_ACCESS_TOKEN available for retry")
-        else:
-            try:
-                response = authenticated_client.search_items(config.site_id, params=search_params)
-                search_data = _dict_json(response)
-                artifacts.search_with_auth, _ = atomic_write_json(
-                    workdir / "search_with_auth.json", search_data
-                )
-                active_client = authenticated_client
+
+    if search_data is None:
+        # Anonymous probe did not deliver a usable body. Decide whether
+        # to escalate to the authenticated client.
+        if anon_attempt.status_code in (401, 403):
+            notes.append(f"anonymous search returned {anon_attempt.status_code}")
+            if authenticated_client is None:
+                notes.append("no MELI_ACCESS_TOKEN available for retry")
+            else:
                 token_used = True
-            except HttpError as auth_exc:
-                notes.append(f"authenticated search failed with {auth_exc.status_code}")
-    except IngestionError as exc:
-        notes.append(f"search failed: {exc}")
+                auth_attempt = _probe(
+                    authenticated_client,
+                    config.site_id,
+                    search_params,
+                    authenticated=True,
+                )
+                artifacts.search_with_auth = _write_probe_artifact(
+                    workdir / "search_with_auth.json",
+                    endpoint=search_endpoint,
+                    attempt=auth_attempt,
+                    token=known_token,
+                )
+                if (
+                    auth_attempt.status_code
+                    and 200 <= auth_attempt.status_code < 300
+                    and isinstance(auth_attempt.body, dict)
+                ):
+                    search_data = auth_attempt.body
+                    active_client = authenticated_client
+                else:
+                    notes.append(
+                        "authenticated search failed with "
+                        f"{auth_attempt.status_code or auth_attempt.error_type}"
+                    )
+        elif anon_attempt.status_code is None:
+            notes.append(
+                f"anonymous search failed with {anon_attempt.error_type}: "
+                f"{anon_attempt.message}"
+            )
+        else:
+            notes.append(f"anonymous search returned {anon_attempt.status_code}")
 
     if search_data is None or active_client is None:
         return _finalize(
@@ -128,7 +178,7 @@ def run_source_gate(
                 decision=SourceGateDecision.INCONCLUSIVE,
                 token_used=token_used,
                 sample_size=0,
-                notes=notes or ["no search response captured"],
+                notes=notes or ["no usable search response captured"],
             ),
         )
 
@@ -171,7 +221,10 @@ def run_source_gate(
             ),
         )
 
-    artifacts.items_batch, _ = atomic_write_json(workdir / "items_batch_001.json", multiget_data)
+    artifacts.items_batch, _ = atomic_write_json(
+        workdir / "items_batch_001.json",
+        sanitize_for_artifact(multiget_data, token=known_token),
+    )
 
     successful_items = _extract_successful_items(multiget_data)
     coverage, date_coverage = _measure_coverage(successful_items)
@@ -181,12 +234,12 @@ def run_source_gate(
     operation_detection = _operation_detection_summary(successful_items)
 
     verified_category_ids, category_notes = _verify_category_ids(
-        active_client, config.site_id, workdir, artifacts
+        active_client, config.site_id, workdir, artifacts, token=known_token
     )
     notes.extend(category_notes)
 
     description_cov, description_paths = _download_descriptions(
-        active_client, sample_ids, descriptions_dir
+        active_client, sample_ids, descriptions_dir, token=known_token
     )
     artifacts.descriptions_written = description_paths
 
@@ -215,7 +268,92 @@ def run_source_gate(
     return _finalize(workdir, artifacts, report)
 
 
-# ---- helpers -----------------------------------------------------------
+# ---- probe capture -----------------------------------------------------
+
+
+@dataclass
+class _ProbeAttempt:
+    """Snapshot of a single HTTP probe suitable for on-disk evidence."""
+
+    authenticated: bool
+    status_code: int | None
+    body: Any = None
+    error_type: str | None = None
+    message: str | None = None
+
+
+def _probe(
+    client: MercadoLibreClient,
+    site_id: str,
+    params: dict[str, Any],
+    *,
+    authenticated: bool,
+) -> _ProbeAttempt:
+    """Run a search call and return a probe attempt, never re-raising."""
+    try:
+        response = client.search_items(site_id, params=params)
+    except HttpError as exc:
+        return _ProbeAttempt(
+            authenticated=authenticated,
+            status_code=exc.status_code,
+            body=exc.response_body,
+            error_type=exc.__class__.__name__,
+            message=exc.message,
+        )
+    except IngestionError as exc:
+        return _ProbeAttempt(
+            authenticated=authenticated,
+            status_code=None,
+            body=None,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+        )
+    try:
+        parsed = response.json()
+    except ValueError:
+        parsed = None
+    return _ProbeAttempt(
+        authenticated=authenticated,
+        status_code=response.status_code,
+        body=parsed,
+    )
+
+
+def _write_probe_artifact(
+    path: Path,
+    *,
+    endpoint: str,
+    attempt: _ProbeAttempt,
+    token: str | None = None,
+) -> Path:
+    """Persist an :class:`_ProbeAttempt` as a wrapped ``{request, response}``."""
+    response: dict[str, Any] = {"status_code": attempt.status_code}
+    if attempt.body is not None:
+        response["body"] = sanitize_for_artifact(attempt.body, token=token)
+    if attempt.error_type is not None:
+        response["error_type"] = attempt.error_type
+    if attempt.message is not None:
+        response["message"] = sanitize_for_artifact(attempt.message, token=token)
+    payload = {
+        "request": {
+            "method": "GET",
+            "endpoint": endpoint,
+            "authenticated": attempt.authenticated,
+        },
+        "response": response,
+    }
+    written, _ = atomic_write_json(path, payload)
+    return written
+
+
+def _extract_token(client: MercadoLibreClient | None) -> str | None:
+    if client is None:
+        return None
+    token = getattr(client._config, "access_token", None)
+    return token if isinstance(token, str) and token else None
+
+
+# ---- search-data helpers -----------------------------------------------
 
 
 def _initial_search_params(config: IngestionConfig) -> dict[str, Any]:
@@ -225,13 +363,6 @@ def _initial_search_params(config: IngestionConfig) -> dict[str, Any]:
         "q": "alquiler",
         "state": "Montevideo",
     }
-
-
-def _dict_json(response: Any) -> dict[str, Any]:
-    data = response.json()
-    if not isinstance(data, dict):
-        return {}
-    return data
 
 
 def _extract_reported_total(search_data: dict[str, Any]) -> int | None:
@@ -362,6 +493,8 @@ def _verify_category_ids(
     site_id: str,
     workdir: Path,
     artifacts: SourceGateArtifacts,
+    *,
+    token: str | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     """Return the verified property_type→category_id mapping."""
     notes: list[str] = []
@@ -372,7 +505,10 @@ def _verify_category_ids(
         notes.append(f"failed to fetch /sites/{site_id}/categories: {exc}")
         return {}, notes
 
-    artifacts.site_categories, _ = atomic_write_json(workdir / "site_categories.json", categories)
+    artifacts.site_categories, _ = atomic_write_json(
+        workdir / "site_categories.json",
+        sanitize_for_artifact(categories, token=token),
+    )
 
     if not isinstance(categories, list):
         notes.append("site categories response was not a JSON list")
@@ -394,9 +530,9 @@ def _verify_category_ids(
                 verified[property_type] = label_to_id[label]
                 break
 
-    missing = sorted(set(PROPERTY_TYPE_LABELS) - set(verified))
+    missing = sorted(REQUIRED_PROPERTY_TYPES - set(verified))
     if missing:
-        notes.append(f"could not verify category ids for: {', '.join(missing)}")
+        notes.append(f"required categories not verified: {', '.join(missing)}")
     return verified, notes
 
 
@@ -404,6 +540,8 @@ def _download_descriptions(
     client: MercadoLibreClient,
     item_ids: list[str],
     descriptions_dir: Path,
+    *,
+    token: str | None = None,
 ) -> tuple[FieldCoverage, list[Path]]:
     coverage = FieldCoverage(total=len(item_ids))
     written: list[Path] = []
@@ -414,7 +552,10 @@ def _download_descriptions(
             logger.info("description unavailable", extra={"item_id": item_id, "error": str(exc)})
             continue
         body = response.json()
-        path, _ = atomic_write_json(descriptions_dir / f"{item_id}.json", body)
+        path, _ = atomic_write_json(
+            descriptions_dir / f"{item_id}.json",
+            sanitize_for_artifact(body, token=token),
+        )
         written.append(path)
         if isinstance(body, dict) and (body.get("plain_text") or body.get("text")):
             coverage.present += 1
@@ -447,10 +588,11 @@ def _decide(
         )
         return SourceGateDecision.REJECTED
 
-    if not verified_category_ids:
+    missing_categories = sorted(REQUIRED_PROPERTY_TYPES - verified_category_ids.keys())
+    if missing_categories:
         notes.append(
-            "no category ids could be verified from the live site tree — "
-            "cannot approve the source"
+            "cannot approve: required property categories not verified: "
+            f"{', '.join(missing_categories)}"
         )
         return SourceGateDecision.INCONCLUSIVE
 
@@ -465,7 +607,9 @@ def _finalize(
     coverage_path, coverage_sha = atomic_write_json(workdir / "coverage.json", report.as_dict())
     artifacts.coverage = coverage_path
 
-    if report.decision is SourceGateDecision.APPROVED and report.verified_category_ids:
+    if report.decision is SourceGateDecision.APPROVED and REQUIRED_PROPERTY_TYPES.issubset(
+        report.verified_category_ids.keys()
+    ):
         artifacts.approval = write_approval(
             workdir,
             report=report,
@@ -473,3 +617,9 @@ def _finalize(
             coverage_sha256=coverage_sha,
         )
     return report, artifacts
+
+
+# Keep AuthenticationError / AuthorizationError references so linters see
+# them being used even though the probe helper handles both via the
+# HttpError base class.
+_ = (AuthenticationError, AuthorizationError)
