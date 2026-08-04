@@ -143,3 +143,39 @@ Una respuesta de MercadoLibre guardada en `data/raw/mercadolibre/**/` **nunca** 
 - todas las correcciones se hacen re-parseando los originales.
 
 Esto garantiza que cualquier resultado de ETL o entrenamiento se pueda reproducir bit-a-bit a partir de la evidencia original.
+
+## Artefacto firmado del source gate
+
+Cuando el source gate decide `APPROVED`, además del `coverage.json` emite un `source_gate_approval.json` en el mismo directorio. Ese archivo declara la fuente, el sitio, las categorías verificadas contra `/sites/{site_id}/categories`, y — crítico — el **SHA-256** del `coverage.json` referenciado.
+
+El pipeline de ingesta (`scripts/run_ingestion.py`) requiere el flag `--gate-approval PATH`. Antes de abrir sockets, crear SQLite o escribir en disco:
+
+1. lee el archivo;
+2. valida que la decisión sea `APPROVED` y que la fuente/sitio coincidan con el target del proyecto;
+3. valida que exista al menos un `category_ids` con IDs no vacíos;
+4. relee `coverage.json` desde disco y recalcula su SHA-256;
+5. compara con el hash almacenado en el approval.
+
+Cualquier discrepancia (`SourceGateApprovalMissing`, `SourceGateApprovalInvalid`, `SourceGateApprovalIntegrityError`) termina el proceso en exit code `2` sin efectos secundarios.
+
+Motivación:
+
+- Un README con una advertencia no impide correr un comando por accidente. La restricción tiene que estar **en el código**.
+- Sin este check, sería posible ejecutar la ingesta con categorías incorrectas hardcodeadas (`MLU1466` era "Casas", no "Apartamentos") y contaminar el dataset silenciosamente.
+- El SHA-256 impide que alguien edite `coverage.json` a posteriori para "aprobar" una corrida que no cumplió los umbrales.
+
+## Primera consulta como fuente de trazabilidad
+
+Cada `run_items.query_id` guarda la **primera** consulta (dentro de esa corrida) que descubrió el `item_id`. Cuando el mismo ID aparece en una consulta posterior:
+
+- **no** se reasigna el `query_id`;
+- **no** se crea otra fila en `run_items`;
+- se contabiliza como duplicado en `duplicate_ids_across_queries`.
+
+De manera análoga, `run_items.position` proviene del orden global de descubrimiento (empezando en 1), **no** de la posición dentro del batch de multiget (que ordena alfabéticamente sólo para agrupar de forma determinista).
+
+Motivación:
+
+- Permite reconstruir, para cada publicación, en qué segmento (barrio, precio, dormitorios) fue encontrada por primera vez. Es información imprescindible para diagnosticar la cobertura del plan.
+- Sin esta trazabilidad, dos plans distintos pueden producir el mismo inventario final sin que se pueda auditar cuál segmento aportó qué.
+- Deja `run_items.query_id` **no nulo** para todo ítem descargado correctamente, lo que simplifica los joins de análisis.
