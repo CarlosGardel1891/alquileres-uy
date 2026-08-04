@@ -110,6 +110,12 @@ class SourceGateReport:
     available_filters: list[str] = field(default_factory=list)
     reported_total: int | None = None
     verified_category_ids: dict[str, str] = field(default_factory=dict)
+    operation_value_coverage: FieldCoverage = field(default_factory=FieldCoverage)
+    property_type_value_coverage: FieldCoverage = field(default_factory=FieldCoverage)
+    montevideo_coverage: FieldCoverage = field(default_factory=FieldCoverage)
+    target_valid_coverage: FieldCoverage = field(default_factory=FieldCoverage)
+    classification_reasons: dict[str, int] = field(default_factory=dict)
+    category_tree: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -125,7 +131,27 @@ class SourceGateReport:
             "available_filters": list(self.available_filters),
             "reported_total": self.reported_total,
             "verified_category_ids": dict(self.verified_category_ids),
+            "operation_value_coverage": self.operation_value_coverage.as_dict(),
+            "property_type_value_coverage": self.property_type_value_coverage.as_dict(),
+            "montevideo_coverage": self.montevideo_coverage.as_dict(),
+            "target_valid_coverage": self.target_valid_coverage.as_dict(),
+            "classification_reasons": dict(self.classification_reasons),
+            "category_tree": dict(self.category_tree),
         }
+
+
+@dataclass(frozen=True)
+class SampleItemClassification:
+    """Per-item verdict used to compute the combined-target coverage."""
+
+    item_id: str | None
+    operation: str
+    property_type: str
+    location_valid: bool
+    monthly_rental: bool
+    allowed_property_type: bool
+    valid_for_target: bool
+    reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True)
