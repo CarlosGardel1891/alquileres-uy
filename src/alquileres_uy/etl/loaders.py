@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,8 +60,8 @@ def iter_raw_items(run: RawRunContract) -> Iterator[ExtractedItem]:
                 source_run_id=run.run_id,
                 body=body,
                 description_body=description_body,
-                first_seen_at=run.started_at or _fallback_now(),
-                last_seen_at=run.finished_at or run.started_at or _fallback_now(),
+                first_seen_at=run.started_at,
+                last_seen_at=run.finished_at,
             )
 
 
@@ -90,7 +89,3 @@ def _relative(path: Path, root: Path) -> str:
         return str(path.relative_to(root)).replace("\\", "/")
     except ValueError:
         return path.name
-
-
-def _fallback_now() -> datetime:
-    return datetime.now(UTC)
