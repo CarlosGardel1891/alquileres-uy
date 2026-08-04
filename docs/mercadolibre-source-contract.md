@@ -16,7 +16,10 @@ Distingue explícitamente entre:
 - 2026-08-04, aprox. 17:04 UTC.
 - Evidencia local: `data/raw/mercadolibre/source_gate/2026-08-04T170426Z_a9c546bd/`
   - `coverage.json` — reporte estructurado del gate.
+  - `search_no_auth.json` — wrapper `{request, response: {status_code: 403, body}}` con el `403` sanitizado.
   - `exploration.json` — sondeo adicional a endpoints complementarios.
+
+> El artefacto `search_no_auth.json` **siempre** se emite ahora (éxito, 401, 403, timeout, etc.). `search_with_auth.json` sólo se emite si el pipeline decidió ejecutar la llamada autenticada. Ambos pasan por un sanitizador recursivo que redacta claves sensibles (`authorization`, `access_token`, `token`, `cookie`, `x-auth-token`) y reemplaza cualquier aparición literal del token conocido.
 
 ## 2. Endpoints probados
 
@@ -79,6 +82,11 @@ Distingue explícitamente entre:
 ## 11. Decisión final del source gate
 
 **`INCONCLUSIVE`** (exit code `3`).
+
+- `decision`: `INCONCLUSIVE`.
+- `token_used`: `false` (no hay `MELI_ACCESS_TOKEN`, así que el pipeline nunca ejecutó la llamada autenticada).
+- Categorías verificadas: **ninguna** — sin acceso al árbol del sitio, el gate no puede confirmar `apartment` ni `house`, así que aunque la cobertura de campos hubiera sido suficiente, la decisión igual habría sido `INCONCLUSIVE`.
+- `source_gate_approval.json`: **no** creado.
 
 Motivo: la búsqueda anónima devolvió `403` y no hay `MELI_ACCESS_TOKEN` para reintentar. No se puede afirmar ni negar que MercadoLibre cumpla el contrato mínimo; sólo se puede afirmar que no lo cumple **anónimamente**.
 
