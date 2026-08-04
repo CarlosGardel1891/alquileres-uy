@@ -234,6 +234,61 @@ Motivación:
 - Un `token_used = false` cuando el token se envió y falló era engañoso: sugería que el proyecto ni siquiera intentó autenticarse.
 - Con la semántica correcta, el reporte y el `coverage.json` reflejan fielmente el comportamiento del pipeline y permiten diagnosticar "¿la API rechazó al token?" vs "¿no había token disponible?".
 
+## Resolución jerárquica de categorías
+
+`/sites/{site_id}/categories` sólo devuelve los nodos raíz del árbol de categorías de MercadoLibre. Los tipos que el proyecto necesita (`Apartamentos`, `Casas`) pueden estar varios niveles por debajo, típicamente dentro de un nodo intermedio como `Inmuebles`. El source gate resuelve esto con un recorrido iterativo BFS (`src/alquileres_uy/ingest/category_tree.py`):
+
+- Empieza en la respuesta del endpoint del sitio, encola cada nodo raíz.
+- Para cada nodo desencolado, consulta `/categories/{id}` para leer sus `children_categories` y los encola.
+- Mantiene un `visited: set[str]` para evitar ciclos y llamadas duplicadas.
+- Aplica dos límites defensivos (`MAX_CATEGORY_DEPTH=10`, `MAX_CATEGORY_NODES=1000`). Si se supera cualquiera, marca `limits_exceeded=True`, agrega una nota al reporte, no aprueba y no emite approval.
+- Compara nombres mediante `normalize_category_name` (NFKD + strip + lower + colapso de espacios) contra un alias set fijo — nunca por substring.
+
+Cuando aparecen dos nodos con el mismo alias para un tipo (por ejemplo dos categorías cuyo nombre normalizado es `apartamentos`), el resolver **no elige silenciosamente uno**: registra todas las candidatas en `candidates[apartment]`, marca `apartment` como ambiguous y fuerza `INCONCLUSIVE`. La ambigüedad es un problema del contrato, no del código.
+
+Motivación:
+
+- Consumir sólo el nivel raíz era el bug histórico que hacía que el gate perdiera categorías aunque el token funcionara.
+- Un match por substring convertiría un nodo llamado "Propiedades y Apartamentos" en un candidato falso, contaminando el plan.
+- Un límite defensivo evita que una API malformada o un ciclo produzcan un loop infinito.
+
+## Cobertura combinada del target
+
+La decisión del gate exige que al menos **16 de 20** publicaciones de la muestra cumplan **simultáneamente**:
+
+- operación clasificada como *alquiler mensual* (por `OPERATION.value_name` o `value_id`, nunca inferida del título);
+- tipo de propiedad *apartment* o *house* (por `category_id` verificada, o atributo `PROPERTY_TYPE`; si ambas fuentes se contradicen → `property_type_conflict` → inválido);
+- ubicación normalizada dentro de Montevideo (por `location.state.name`).
+
+Motivación:
+
+- Medir "presencia del campo" ya no es suficiente — un ítem puede tener `OPERATION=Venta` con el campo presente y aún así estar fuera del alcance.
+- Métricas separadas (20 alquileres, 20 casas, 20 en Montevideo) pueden ocultar que ningún ítem cumple los tres criterios a la vez. Sólo el **target combinado** protege contra ese sesgo.
+- Distingue calidad (`REJECTED` si el target < 16 con datos accesibles) de acceso (`INCONCLUSIVE` si no se pudieron obtener datos estructurados).
+
+## Coverage como fuente de verdad del approval
+
+El `source_gate_approval.json` funciona como un puntero + comprobante:
+
+- **puntero:** contiene el nombre del `coverage.json` acompañante.
+- **hash de integridad:** el SHA-256 del `coverage.json` está guardado en el approval; el loader recalcula el hash del archivo en disco y rechaza cualquier discrepancia.
+- **copia redundante verificable:** `category_ids`, `available_filters`, `operation_filter.mode` y `sample_size` están duplicados en el approval sólo para que el loader pueda **compararlos** con los valores dentro de `coverage.json`.
+
+El loader:
+
+1. valida forma básica del approval (source, site_id, decision, categorías exactamente `{apartment, house}`);
+2. resuelve `source_gate_report_path` con defensa contra path traversal (`..`, rutas absolutas o resolución fuera del directorio → `SourceGateApprovalIntegrityError`);
+3. recalcula el SHA-256 del archivo referenciado y lo compara con el hash guardado;
+4. reléé el `coverage.json`, valida que tenga `decision=APPROVED` y que sus valores semánticos coincidan **exactamente** con los del approval;
+5. re-valida los umbrales (sample_size=20; cada campo esencial ≥16/20; date_created ≥16/20; target combinado ≥16/20);
+6. construye `ApprovedSourceContract` usando los valores del `coverage.json` — el approval no puede introducir un contrato distinto.
+
+Motivación:
+
+- Sin comparación semántica, un atacante podía dejar `coverage.json` intacto (para preservar el hash) y modificar sólo `category_ids` en el approval para inyectar categorías arbitrarias en el plan de ingesta.
+- Path traversal en `source_gate_report_path` permitía referenciar `/etc/passwd` o un `coverage.json` favorable ubicado fuera del run folder.
+- Construir el contrato desde el coverage (no desde el approval) hace irrelevante cualquier discrepancia futura que el loader olvide comparar.
+
 ## Primera consulta como fuente de trazabilidad
 
 Cada `run_items.query_id` guarda la **primera** consulta (dentro de esa corrida) que descubrió el `item_id`. Cuando el mismo ID aparece en una consulta posterior:
