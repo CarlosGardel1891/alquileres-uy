@@ -349,3 +349,363 @@ def test_gate_reports_partial_coverage(tmp_path: Path, missing_field: str) -> No
 
     assert report.essential_coverage[missing_field].present == 15
     assert report.decision is SourceGateDecision.REJECTED
+
+
+# ---- probe artifacts: 401/403/network evidence -----------------------------
+
+
+def _read_wrapper(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_anonymous_401_creates_wrapped_search_no_auth_artifact(tmp_path: Path) -> None:
+    session = FakeSession(
+        [FakeResponse(status_code=401, json_data=load_fixture("unauthorized.json"))]
+    )
+    anonymous = _real_client(session, _config(tmp_path, token=None))
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path), anonymous, authenticated_client=None, workdir=tmp_path / "gate"
+    )
+
+    assert artifacts.search_no_auth is not None
+    wrapper = _read_wrapper(artifacts.search_no_auth)
+    assert wrapper["request"] == {
+        "method": "GET",
+        "endpoint": "/sites/MLU/search",
+        "authenticated": False,
+    }
+    assert wrapper["response"]["status_code"] == 401
+    assert wrapper["response"]["body"]["message"] == "invalid_token"
+    assert report.decision is SourceGateDecision.INCONCLUSIVE
+    assert artifacts.approval is None
+
+
+def test_anonymous_403_creates_wrapped_search_no_auth_artifact(tmp_path: Path) -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                status_code=403,
+                json_data={"message": "forbidden", "error": "forbidden", "status": 403},
+            )
+        ]
+    )
+    anonymous = _real_client(session, _config(tmp_path, token=None))
+
+    _, artifacts = run_source_gate(
+        _config(tmp_path), anonymous, authenticated_client=None, workdir=tmp_path / "gate"
+    )
+
+    wrapper = _read_wrapper(artifacts.search_no_auth)
+    assert wrapper["response"]["status_code"] == 403
+    assert wrapper["response"]["body"]["error"] == "forbidden"
+    assert "Authorization" not in wrapper["request"]
+    assert "authorization" not in wrapper["response"]
+
+
+def test_authenticated_error_creates_wrapped_search_with_auth_artifact(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    auth_session = FakeSession(
+        [
+            FakeResponse(
+                status_code=403,
+                json_data={"message": "still forbidden", "status": 403},
+            )
+        ]
+    )
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="s3cret"))
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path, token="s3cret"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    assert artifacts.search_with_auth is not None
+    wrapper = _read_wrapper(artifacts.search_with_auth)
+    assert wrapper["request"]["authenticated"] is True
+    assert wrapper["response"]["status_code"] == 403
+    assert wrapper["response"]["body"]["message"] == "still forbidden"
+    assert report.decision is SourceGateDecision.INCONCLUSIVE
+    assert report.token_used is True  # token was sent even though auth failed
+
+
+def test_authenticated_401_creates_wrapped_search_with_auth_artifact(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    auth_session = FakeSession(
+        [FakeResponse(status_code=401, json_data=load_fixture("unauthorized.json"))]
+    )
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="s3cret"))
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path, token="s3cret"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    wrapper = _read_wrapper(artifacts.search_with_auth)
+    assert wrapper["response"]["status_code"] == 401
+    assert report.token_used is True
+
+
+def test_network_error_creates_artifact_with_null_status(tmp_path: Path) -> None:
+    from requests import Timeout
+
+    session = FakeSession([Timeout("boom"), Timeout("boom"), Timeout("boom")])
+    anonymous = _real_client(session, _config(tmp_path, token=None))
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path), anonymous, authenticated_client=None, workdir=tmp_path / "gate"
+    )
+
+    assert artifacts.search_no_auth is not None
+    wrapper = _read_wrapper(artifacts.search_no_auth)
+    assert wrapper["response"]["status_code"] is None
+    assert wrapper["response"]["error_type"] == "MaxRetriesExceeded"
+    assert "message" in wrapper["response"]
+    assert report.decision is SourceGateDecision.INCONCLUSIVE
+
+
+def test_search_with_auth_not_created_when_no_token_available(tmp_path: Path) -> None:
+    session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    anonymous = _real_client(session, _config(tmp_path, token=None))
+
+    _, artifacts = run_source_gate(
+        _config(tmp_path, token=None),
+        anonymous,
+        authenticated_client=None,
+        workdir=tmp_path / "gate",
+    )
+
+    assert artifacts.search_no_auth is not None
+    assert artifacts.search_with_auth is None
+
+
+def test_search_with_auth_not_created_when_anonymous_returns_200(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [
+            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
+            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
+            FakeResponse(status_code=200, json_data=_site_categories().json()),
+        ]
+        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
+    )
+    auth_session = FakeSession([])  # would explode on any call
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="s3cret"))
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path, token="s3cret"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    assert artifacts.search_with_auth is None
+    assert report.token_used is False
+    assert auth_session.calls == []
+
+
+def test_probe_artifacts_never_contain_authorization_header_or_token(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    auth_session = FakeSession(
+        [
+            FakeResponse(
+                status_code=403,
+                json_data={
+                    "message": "still forbidden",
+                    "status": 403,
+                    # Attackers might echo request headers into responses;
+                    # sanitizer must scrub these keys.
+                    "authorization": "Bearer very-secret-token",
+                    "token": "very-secret-token",
+                },
+            )
+        ]
+    )
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="very-secret-token"))
+
+    _, artifacts = run_source_gate(
+        _config(tmp_path, token="very-secret-token"),
+        anonymous,
+        authenticated,
+        tmp_path / "gate",
+    )
+
+    text = artifacts.search_with_auth.read_text(encoding="utf-8")
+    assert "very-secret-token" not in text
+    assert "Bearer" not in text.split("very-secret-token")[0]  # nothing leaked
+
+
+# ---- token_used semantics -----------------------------------------------
+
+
+def test_token_used_false_when_anonymous_returns_200_even_with_token(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [
+            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
+            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
+            FakeResponse(status_code=200, json_data=_site_categories().json()),
+        ]
+        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
+    )
+    auth_session = FakeSession([])
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
+
+    report, _ = run_source_gate(
+        _config(tmp_path, token="tok"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    assert report.token_used is False
+
+
+def test_token_used_true_when_auth_call_returns_200(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [FakeResponse(status_code=401, json_data=load_fixture("unauthorized.json"))]
+    )
+    auth_session = FakeSession(
+        [
+            FakeResponse(status_code=200, json_data=load_fixture("search_success.json")),
+            FakeResponse(status_code=200, json_data=load_fixture("item_multiget_success.json")),
+            FakeResponse(status_code=200, json_data=_site_categories().json()),
+        ]
+        + [FakeResponse(status_code=200, json_data=load_fixture("description_success.json"))] * 20
+    )
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
+
+    report, _ = run_source_gate(
+        _config(tmp_path, token="tok"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    assert report.token_used is True
+
+
+def test_token_used_true_when_auth_call_returns_403(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    auth_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "still forbidden", "status": 403})]
+    )
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
+
+    report, _ = run_source_gate(
+        _config(tmp_path, token="tok"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    assert report.token_used is True
+
+
+def test_token_used_true_when_auth_call_returns_401(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    auth_session = FakeSession(
+        [FakeResponse(status_code=401, json_data=load_fixture("unauthorized.json"))]
+    )
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
+
+    report, _ = run_source_gate(
+        _config(tmp_path, token="tok"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    assert report.token_used is True
+
+
+def test_token_used_true_when_auth_call_times_out(tmp_path: Path) -> None:
+    from requests import Timeout
+
+    anon_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    auth_session = FakeSession([Timeout("boom"), Timeout("boom"), Timeout("boom")])
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
+
+    report, _ = run_source_gate(
+        _config(tmp_path, token="tok"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    assert report.token_used is True
+
+
+def test_token_used_false_without_authenticated_client(tmp_path: Path) -> None:
+    session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    anonymous = _real_client(session, _config(tmp_path, token=None))
+
+    report, _ = run_source_gate(
+        _config(tmp_path, token=None),
+        anonymous,
+        authenticated_client=None,
+        workdir=tmp_path / "gate",
+    )
+
+    assert report.token_used is False
+
+
+def test_coverage_reflects_token_used(tmp_path: Path) -> None:
+    anon_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "forbidden", "status": 403})]
+    )
+    auth_session = FakeSession(
+        [FakeResponse(status_code=403, json_data={"message": "still forbidden", "status": 403})]
+    )
+    anonymous = _real_client(anon_session, _config(tmp_path, token=None))
+    authenticated = _real_client(auth_session, _config(tmp_path, token="tok"))
+
+    _, artifacts = run_source_gate(
+        _config(tmp_path, token="tok"), anonymous, authenticated, tmp_path / "gate"
+    )
+
+    coverage = json.loads(artifacts.coverage.read_text(encoding="utf-8"))
+    assert coverage["token_used"] is True
+
+
+# ---- required categories in the gate -----------------------------------
+
+
+def test_gate_inconclusive_when_only_house_verified(tmp_path: Path) -> None:
+    anonymous = _StubClient(
+        search_handler=lambda site_id, params: _successful_search(),
+        items_response=_successful_multiget(),
+        description_response=_description(),
+        site_categories_response=FakeResponse(json_data=[{"id": "MLU1466", "name": "Casas"}]),
+    )
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path), anonymous, authenticated_client=None, workdir=tmp_path / "gate"
+    )
+
+    assert report.decision is SourceGateDecision.INCONCLUSIVE
+    assert artifacts.approval is None
+    assert not (tmp_path / "gate" / APPROVAL_FILENAME).exists()
+    assert "apartment" in " ".join(report.notes)
+
+
+def test_gate_inconclusive_when_only_apartment_verified(tmp_path: Path) -> None:
+    anonymous = _StubClient(
+        search_handler=lambda site_id, params: _successful_search(),
+        items_response=_successful_multiget(),
+        description_response=_description(),
+        site_categories_response=FakeResponse(
+            json_data=[{"id": "MLU1743", "name": "Apartamentos"}]
+        ),
+    )
+
+    report, artifacts = run_source_gate(
+        _config(tmp_path), anonymous, authenticated_client=None, workdir=tmp_path / "gate"
+    )
+
+    assert report.decision is SourceGateDecision.INCONCLUSIVE
+    assert artifacts.approval is None
+    assert "house" in " ".join(report.notes)
