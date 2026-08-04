@@ -232,6 +232,17 @@ Cada corrida ETL escribe:
 
 `data/processed/**` y los Parquet no se versionan (ver `.gitignore`). Cada corrida escribe una carpeta nueva; ninguna corrida anterior se sobrescribe. La entrada cruda es de sólo lectura para el ETL.
 
+### Reproducibilidad y contratos
+
+- **Data mode de cotización**: el `data_mode` del archivo de exchange rate debe coincidir con el del ETL. Un ETL real con una tasa fixture termina con exit code 2 sin efectos. `retrieved_at` exige timezone explícito.
+- **Agregación temporal**: `first_seen_at` es el mínimo histórico de todas las observaciones del mismo `(source, source_item_id)`. `last_seen_at` es el máximo. `observations_count` refleja el total, y la fila canónica elegida (por `last_updated` → `last_seen_at` → `source_run_id` → `raw_item_path`) hereda estos agregados en lugar de sobrescribirlos.
+- **Timestamps deterministas**: `manifest.started_at` y `manifest.finished_at` son obligatorios, con timezone y `finished_at >= started_at`. El ETL nunca cae a `datetime.now()` como fallback de datos, y todas las filas de una corrida comparten el mismo `etl_processed_at` (el start del pipeline).
+- **Manifest autoritativo**: el ETL sólo procesa archivos declarados en `manifest.files` con `path`/`kind`/`sha256`. Cualquier archivo extra bajo `items/` o `descriptions/` no declarado, o un hash que no coincida, rechaza la corrida entera.
+- **Unidades de área**: `parse_area` sólo acepta `m²`/`m2`/`sqm`/`metros cuadrados`. Payloads como `{"number": 700, "unit": "ft²"}` producen `unsupported_area_unit` en `quality_issues` y excluyen la fila del `model_ready.parquet`.
+- **`--strict` real**: cuando se activa, cualquier fila rechazada, atributo no mapeado, fecha inválida, inconsistencia de superficie, gasto común con moneda no soportada, o `quality_issues` no vacío hace fallar la corrida con exit 1 antes de escribir el output.
+- **Lineage completo**: `lineage.json` se escribe **último** e incluye SHA-256 de `manifest.json`, `ingestion_summary.json`, cada batch y descripción declarados, los cuatro Parquet, `etl_summary.json`, `data_quality_report.json`, `unmapped_attributes.json` y `schema.json`. Contiene `"lineage_self_hashed": false` porque no puede hashearse a sí mismo.
+- **Publicación atómica**: la corrida se escribe en `<workdir>.tmp` y sólo al final se renombra al directorio final. Si algún paso falla, no queda una carpeta parcial que parezca completa.
+
 ### Estado actual
 
 - Source gate real: `INCONCLUSIVE`.
