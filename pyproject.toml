@@ -13,6 +13,11 @@ authors = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+ingest = [
+    "requests==2.32.3"
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
