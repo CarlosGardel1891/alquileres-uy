@@ -23,8 +23,10 @@ import sys
 from pathlib import Path
 
 from alquileres_uy.etl.config import EtlConfig
-from alquileres_uy.etl.currency import InvalidExchangeRate
-from alquileres_uy.etl.pipeline import EtlPipeline
+from alquileres_uy.etl.contracts import RawRunValidationError
+from alquileres_uy.etl.currency import ExchangeRateModeMismatch, InvalidExchangeRate
+from alquileres_uy.etl.neighborhoods import InvalidAliasFile
+from alquileres_uy.etl.pipeline import EtlPipeline, StrictQualityGateError
 from alquileres_uy.ingest.approval import load_approved_contract
 from alquileres_uy.ingest.errors import (
     SourceGateApprovalIntegrityError,
@@ -121,9 +123,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         try:
             result = pipeline.run()
+        except ExchangeRateModeMismatch as exc:
+            logging.error("exchange rate data_mode mismatch: %s", exc)
+            return EXIT_CONFIG_ERROR
         except InvalidExchangeRate as exc:
             logging.error("invalid exchange rate: %s", exc)
             return EXIT_CONFIG_ERROR
+        except (RawRunValidationError, InvalidAliasFile) as exc:
+            logging.error("invalid input: %s", exc)
+            return EXIT_CONFIG_ERROR
+        except StrictQualityGateError as exc:
+            logging.error("%s", exc)
+            return EXIT_SCHEMA_ERROR
     except Exception:
         logging.exception("etl pipeline crashed")
         return EXIT_SCHEMA_ERROR
