@@ -1,0 +1,9 @@
+{
+  "id": "MLU_TEST_ROOT",
+  "name": "Inmuebles",
+  "children_categories": [
+    {"id": "MLU_TEST_APARTMENT", "name": "Apartamentos", "total_items_in_this_category": 12345},
+    {"id": "MLU_TEST_HOUSE", "name": "Casas", "total_items_in_this_category": 5678},
+    {"id": "MLU_TEST_LAND", "name": "Terrenos", "total_items_in_this_category": 999}
+  ]
+}

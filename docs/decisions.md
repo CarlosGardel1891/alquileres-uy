@@ -80,3 +80,227 @@ Motivación:
 - El mercado de alquileres tiene tendencia y estacionalidad; un split aleatorio filtra información del futuro hacia el pasado y sobreestima el rendimiento.
 - El objetivo de producción es predecir precios sobre publicaciones **nuevas**, por lo que la evaluación debe simular exactamente ese escenario.
 - Reduce fuga de información y hace el número reportado comparable con lo que ocurrirá en producción.
+
+## MercadoLibre como fuente primaria
+
+La fuente primaria de publicaciones es **MercadoLibre Uruguay** (`site_id = MLU`). Su uso queda **condicionado al source gate** documentado en `docs/mercadolibre-source-contract.md`.
+
+Si el gate devuelve `REJECTED` o `INCONCLUSIVE`:
+
+- no se implementa ni ejecuta la ingesta masiva sobre MercadoLibre;
+- no se inicia scraping automáticamente sobre otra fuente (InfoCasas, Gallito);
+- se detiene la fase y se entrega la evidencia (respuestas y cobertura) al TL para decidir una fase de fallback.
+
+Esta decisión evita construir infraestructura sobre una fuente que no puede sostener el volumen o la calidad requerida.
+
+## Segmentación en lugar de `search_type=scan`
+
+Para la búsqueda pública general (`/sites/MLU/search`) **no se usa** `search_type=scan`.
+
+La documentación oficial describe `search_type=scan` para `/users/{user_id}/items/search` (ítems de un usuario), no para la búsqueda general del sitio. Asumir lo contrario sería un supuesto no verificado que se sale del contrato observado.
+
+En su lugar, cuando un segmento reporta más de ~900 resultados, la ingesta lo divide:
+
+1. por rango de precio;
+2. por dormitorios si sigue excedido;
+3. eventualmente por barrio.
+
+Los rangos son contiguos y sin huecos. La segmentación se registra en `queries` (SQLite) y en cada `manifest.json`.
+
+## SQLite para control, no para datos analíticos
+
+`data/ingestion.sqlite` almacena únicamente **control-plane**:
+
+- corridas (`runs`);
+- consultas ejecutadas (`queries`);
+- IDs vistos (`items`) con idempotencia por `item_id`;
+- relación entre corridas e ítems (`run_items`);
+- errores permanentes (`request_errors`).
+
+**No** contiene el payload analítico de las publicaciones. El payload analítico (con features derivadas) aparecerá como **Parquet** en la Fase 2, generado a partir de los archivos crudos en `data/raw/mercadolibre/`.
+
+Esta separación deja a SQLite en un rol simple y auditable, y permite reprocesar el analítico sin tocar el control de corridas.
+
+## Ingesta local
+
+La ingesta real corre **localmente**, nunca desde GitHub Actions ni desde Render.
+
+Motivación:
+
+- GitHub Actions no debe emitir tráfico sostenido contra MercadoLibre desde IPs compartidas ni almacenar tokens.
+- Render tiene filesystem efímero y no ofrece garantías de persistencia para carpetas crudas.
+- Reproducibilidad y control quedan en la máquina de desarrollo; el pipeline de deploy sólo sirve modelos ya entrenados.
+
+CI se limita a instalar dependencias y correr tests con fixtures locales.
+
+## Datos crudos inmutables (refuerzo)
+
+Una respuesta de MercadoLibre guardada en `data/raw/mercadolibre/**/` **nunca** se modifica:
+
+- las escrituras son atómicas (`.tmp` + `os.replace`);
+- `atomic_write_bytes` rehúsa sobrescribir un archivo existente;
+- las nuevas corridas van a carpetas nuevas identificadas por `timestamp_run-id`;
+- todas las correcciones se hacen re-parseando los originales.
+
+Esto garantiza que cualquier resultado de ETL o entrenamiento se pueda reproducir bit-a-bit a partir de la evidencia original.
+
+## Artefacto firmado del source gate
+
+Cuando el source gate decide `APPROVED`, además del `coverage.json` emite un `source_gate_approval.json` en el mismo directorio. Ese archivo declara la fuente, el sitio, las categorías verificadas contra `/sites/{site_id}/categories`, y — crítico — el **SHA-256** del `coverage.json` referenciado.
+
+El pipeline de ingesta (`scripts/run_ingestion.py`) requiere el flag `--gate-approval PATH`. Antes de abrir sockets, crear SQLite o escribir en disco:
+
+1. lee el archivo;
+2. valida que la decisión sea `APPROVED` y que la fuente/sitio coincidan con el target del proyecto;
+3. valida que exista al menos un `category_ids` con IDs no vacíos;
+4. relee `coverage.json` desde disco y recalcula su SHA-256;
+5. compara con el hash almacenado en el approval.
+
+Cualquier discrepancia (`SourceGateApprovalMissing`, `SourceGateApprovalInvalid`, `SourceGateApprovalIntegrityError`) termina el proceso en exit code `2` sin efectos secundarios.
+
+Motivación:
+
+- Un README con una advertencia no impide correr un comando por accidente. La restricción tiene que estar **en el código**.
+- Sin este check, sería posible ejecutar la ingesta con categorías incorrectas hardcodeadas (`MLU1466` era "Casas", no "Apartamentos") y contaminar el dataset silenciosamente.
+- El SHA-256 impide que alguien edite `coverage.json` a posteriori para "aprobar" una corrida que no cumplió los umbrales.
+
+## Categorías obligatorias del contrato
+
+El alcance de la ingesta está cerrado a **dos** categorías de MercadoLibre Uruguay: apartamentos y casas. El proyecto expone esa lista como una única constante compartida:
+
+```python
+REQUIRED_PROPERTY_TYPES = frozenset({"apartment", "house"})
+```
+
+y la usa en cuatro puntos:
+
+1. `source_gate._decide` — sólo devuelve `APPROVED` cuando `verified_category_ids` cubre exactamente esas dos claves;
+2. `approval.write_approval` — se niega a emitir `source_gate_approval.json` con una categoría faltante;
+3. `approval.load_approved_contract` — al cargar el approval, exige `category_ids["apartment"]` y `category_ids["house"]` no vacíos e indica en el mensaje de error cuál falta;
+4. `query_plan.build_initial_plan` — vuelve a validar la precondición porque nada garantiza que el contrato haya venido del loader (por ejemplo en tests).
+
+Motivación:
+
+- La ingesta con una sola categoría produciría un dataset sesgado y silenciosamente incorrecto (por ejemplo, todos "Casas" sin "Apartamentos").
+- Las claves internas son `"apartment"` y `"house"` — nunca `"apartamento"`, `"casas"`, `"apartments"`, etc. Los nombres en español sólo se usan para hacer *matching* contra la metadata de MercadoLibre en `_verify_category_ids`.
+- Que la validación viva en un único lugar (constante compartida) evita que las cuatro capas divergen.
+
+## Evidencia de probes fallidos
+
+Toda llamada de búsqueda del source gate genera un artefacto en disco, tanto en éxito (`200`) como en fallo (`401`, `403`, timeout, etc.). El formato uniforme es:
+
+```json
+{
+  "request": {
+    "method": "GET",
+    "endpoint": "/sites/MLU/search",
+    "authenticated": false
+  },
+  "response": {
+    "status_code": 403,
+    "body": {
+      "message": "forbidden",
+      "error": "forbidden",
+      "status": 403
+    }
+  }
+}
+```
+
+Para errores de red sin respuesta HTTP, `status_code` es `null` y se agregan `error_type` y `message`.
+
+Los archivos son:
+
+- `search_no_auth.json` — siempre.
+- `search_with_auth.json` — sólo si el pipeline **decidió** ejecutar la llamada autenticada (o sea: el anónimo devolvió `401`/`403` **y** hay `authenticated_client`).
+
+Motivación:
+
+- El caso más importante para auditar la fuente es cuando falla. Perder el body del `403` obligaba a re-consultar manualmente MercadoLibre para reconstruir la evidencia.
+- El wrapper `{request, response}` deja explícito qué se pidió y qué respondió, y separa metadatos del request (`authenticated`) del body real, evitando ambigüedad cuando el body está vacío o es un error.
+- Todos los artefactos pasan por `sanitize_for_artifact`, que redacta claves sensibles (`authorization`, `access_token`, `token`, `cookie`, `x-auth-token`, case-insensitive) y — si se conoce el token literal — lo reemplaza en cualquier string, URL o mensaje anidado.
+
+## Semántica de `token_used`
+
+`token_used` responde a "¿se envió un bearer token en al menos una llamada?", no a "¿la llamada autenticada fue exitosa?". Se marca `true` en el momento en que el pipeline decide ejecutar `authenticated_client.search_items(...)`, antes del `try`, así:
+
+- si el anónimo devolvió `200` y no se llegó a llamar al autenticado, `token_used = false` (incluso con `MELI_ACCESS_TOKEN` seteado);
+- si el anónimo devolvió `401`/`403` y el autenticado también, `token_used = true`;
+- si el autenticado terminó en timeout, `token_used = true`;
+- si no hay `authenticated_client`, `token_used = false`.
+
+Motivación:
+
+- Un `token_used = false` cuando el token se envió y falló era engañoso: sugería que el proyecto ni siquiera intentó autenticarse.
+- Con la semántica correcta, el reporte y el `coverage.json` reflejan fielmente el comportamiento del pipeline y permiten diagnosticar "¿la API rechazó al token?" vs "¿no había token disponible?".
+
+## Resolución jerárquica de categorías
+
+`/sites/{site_id}/categories` sólo devuelve los nodos raíz del árbol de categorías de MercadoLibre. Los tipos que el proyecto necesita (`Apartamentos`, `Casas`) pueden estar varios niveles por debajo, típicamente dentro de un nodo intermedio como `Inmuebles`. El source gate resuelve esto con un recorrido iterativo BFS (`src/alquileres_uy/ingest/category_tree.py`):
+
+- Empieza en la respuesta del endpoint del sitio, encola cada nodo raíz.
+- Para cada nodo desencolado, consulta `/categories/{id}` para leer sus `children_categories` y los encola.
+- Mantiene un `visited: set[str]` para evitar ciclos y llamadas duplicadas.
+- Aplica dos límites defensivos (`MAX_CATEGORY_DEPTH=10`, `MAX_CATEGORY_NODES=1000`). Si se supera cualquiera, marca `limits_exceeded=True`, agrega una nota al reporte, no aprueba y no emite approval.
+- Compara nombres mediante `normalize_category_name` (NFKD + strip + lower + colapso de espacios) contra un alias set fijo — nunca por substring.
+
+Cuando aparecen dos nodos con el mismo alias para un tipo (por ejemplo dos categorías cuyo nombre normalizado es `apartamentos`), el resolver **no elige silenciosamente uno**: registra todas las candidatas en `candidates[apartment]`, marca `apartment` como ambiguous y fuerza `INCONCLUSIVE`. La ambigüedad es un problema del contrato, no del código.
+
+Motivación:
+
+- Consumir sólo el nivel raíz era el bug histórico que hacía que el gate perdiera categorías aunque el token funcionara.
+- Un match por substring convertiría un nodo llamado "Propiedades y Apartamentos" en un candidato falso, contaminando el plan.
+- Un límite defensivo evita que una API malformada o un ciclo produzcan un loop infinito.
+
+## Cobertura combinada del target
+
+La decisión del gate exige que al menos **16 de 20** publicaciones de la muestra cumplan **simultáneamente**:
+
+- operación clasificada como *alquiler mensual* (por `OPERATION.value_name` o `value_id`, nunca inferida del título);
+- tipo de propiedad *apartment* o *house* (por `category_id` verificada, o atributo `PROPERTY_TYPE`; si ambas fuentes se contradicen → `property_type_conflict` → inválido);
+- ubicación normalizada dentro de Montevideo (por `location.state.name`).
+
+Motivación:
+
+- Medir "presencia del campo" ya no es suficiente — un ítem puede tener `OPERATION=Venta` con el campo presente y aún así estar fuera del alcance.
+- Métricas separadas (20 alquileres, 20 casas, 20 en Montevideo) pueden ocultar que ningún ítem cumple los tres criterios a la vez. Sólo el **target combinado** protege contra ese sesgo.
+- Distingue calidad (`REJECTED` si el target < 16 con datos accesibles) de acceso (`INCONCLUSIVE` si no se pudieron obtener datos estructurados).
+
+## Coverage como fuente de verdad del approval
+
+El `source_gate_approval.json` funciona como un puntero + comprobante:
+
+- **puntero:** contiene el nombre del `coverage.json` acompañante.
+- **hash de integridad:** el SHA-256 del `coverage.json` está guardado en el approval; el loader recalcula el hash del archivo en disco y rechaza cualquier discrepancia.
+- **copia redundante verificable:** `category_ids`, `available_filters`, `operation_filter.mode` y `sample_size` están duplicados en el approval sólo para que el loader pueda **compararlos** con los valores dentro de `coverage.json`.
+
+El loader:
+
+1. valida forma básica del approval (source, site_id, decision, categorías exactamente `{apartment, house}`);
+2. resuelve `source_gate_report_path` con defensa contra path traversal (`..`, rutas absolutas o resolución fuera del directorio → `SourceGateApprovalIntegrityError`);
+3. recalcula el SHA-256 del archivo referenciado y lo compara con el hash guardado;
+4. reléé el `coverage.json`, valida que tenga `decision=APPROVED` y que sus valores semánticos coincidan **exactamente** con los del approval;
+5. re-valida los umbrales (sample_size=20; cada campo esencial ≥16/20; date_created ≥16/20; target combinado ≥16/20);
+6. construye `ApprovedSourceContract` usando los valores del `coverage.json` — el approval no puede introducir un contrato distinto.
+
+Motivación:
+
+- Sin comparación semántica, un atacante podía dejar `coverage.json` intacto (para preservar el hash) y modificar sólo `category_ids` en el approval para inyectar categorías arbitrarias en el plan de ingesta.
+- Path traversal en `source_gate_report_path` permitía referenciar `/etc/passwd` o un `coverage.json` favorable ubicado fuera del run folder.
+- Construir el contrato desde el coverage (no desde el approval) hace irrelevante cualquier discrepancia futura que el loader olvide comparar.
+
+## Primera consulta como fuente de trazabilidad
+
+Cada `run_items.query_id` guarda la **primera** consulta (dentro de esa corrida) que descubrió el `item_id`. Cuando el mismo ID aparece en una consulta posterior:
+
+- **no** se reasigna el `query_id`;
+- **no** se crea otra fila en `run_items`;
+- se contabiliza como duplicado en `duplicate_ids_across_queries`.
+
+De manera análoga, `run_items.position` proviene del orden global de descubrimiento (empezando en 1), **no** de la posición dentro del batch de multiget (que ordena alfabéticamente sólo para agrupar de forma determinista).
+
+Motivación:
+
+- Permite reconstruir, para cada publicación, en qué segmento (barrio, precio, dormitorios) fue encontrada por primera vez. Es información imprescindible para diagnosticar la cobertura del plan.
+- Sin esta trazabilidad, dos plans distintos pueden producir el mismo inventario final sin que se pueda auditar cuál segmento aportó qué.
+- Deja `run_items.query_id` **no nulo** para todo ítem descargado correctamente, lo que simplifica los joins de análisis.
