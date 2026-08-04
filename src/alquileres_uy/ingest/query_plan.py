@@ -17,7 +17,7 @@ import json
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 
-from .models import ApprovedSourceContract, QuerySegment
+from .models import REQUIRED_PROPERTY_TYPES, ApprovedSourceContract, QuerySegment
 
 DEFAULT_STATE_LABEL = "Montevideo"
 
@@ -48,6 +48,12 @@ def build_initial_plan(
     """
     if not contract.category_ids:
         raise ValueError("cannot build query plan: approved contract has no verified categories")
+    missing = sorted(REQUIRED_PROPERTY_TYPES - contract.category_ids.keys())
+    if missing:
+        raise ValueError(
+            "cannot build query plan: approved contract is missing required "
+            f"property categories: {', '.join(missing)}"
+        )
     segments: list[QuerySegment] = []
     for property_type, category_id in sorted(contract.category_ids.items()):
         if not category_id:
