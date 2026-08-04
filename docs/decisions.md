@@ -289,6 +289,38 @@ Motivación:
 - Path traversal en `source_gate_report_path` permitía referenciar `/etc/passwd` o un `coverage.json` favorable ubicado fuera del run folder.
 - Construir el contrato desde el coverage (no desde el approval) hace irrelevante cualquier discrepancia futura que el loader olvide comparar.
 
+## ETL contract-first mientras la fuente esté bloqueada
+
+El source gate real todavía devuelve `INCONCLUSIVE` sin token oficial, así que no existe una corrida real de ingesta. En vez de esperar, la Fase 2 construye el ETL completo contra fixtures sanitizadas (`tests/fixtures/etl/raw_run/`). Todos los outputs de fixtures llevan `data_mode="fixture"` y el `data_quality_report.json` incluye un `warning` explícito. Ninguna métrica de fixture puede reportarse como resultado del proyecto.
+
+El pipeline se declara en dos estados discretos: `ETL_CONTRACT_READY` (código, tests y CI verdes, sin datos reales) y `ETL_PRODUCTION_VALIDATED` (corrida real con approval válido). Sólo el segundo autoriza la Fase 3 de entrenamiento.
+
+## Cotización fija por corrida
+
+La conversión de UYU→USD nunca consulta una API en runtime. Cada corrida recibe un `--exchange-rate PATH` a un JSON versionado con `base_currency`, `quote_currency`, `uyu_per_usd`, `effective_date`, `source`, `retrieved_at`, `data_mode`. El `lineage.json` de la corrida registra la ruta y el SHA-256 del archivo, así que dos corridas con tasas distintas son distinguibles bit a bit.
+
+Motivación: reproducibilidad y auditoría. Una cotización que cambia en tiempo real vuelve imposible replicar un dataset. Mantenerla explícita también permite comparar el efecto de una tasa vs. otra sin re-ingestar.
+
+## Canonical vs. model-ready
+
+`listings.parquet` (canonical) es el **inventario auditado** y admite campos opcionales faltantes (por ejemplo, `neighborhood_normalized` o `date_created` pueden ser null). `model_ready.parquet` es el **subset apto para entrenamiento** y exige `source_item_id`, `property_type`, `neighborhood_normalized`, `bedrooms`, `total_area_m2`, `price_usd`, `date_created` no nulos, superficie positiva y sin conflictos entre `total_area_m2` y `covered_area_m2`.
+
+Motivación: rechazar cada fila con un opcional faltante perdería trazabilidad. Aceptarlas en el canónico y filtrarlas en el model-ready deja auditables tanto los datos ingeridos como los datos usables para modelar.
+
+## Duplicados conservadores
+
+- **Mismo `source_item_id`**: deduplicado a una sola fila con la observación más nueva (`last_updated` → `last_seen_at` → `raw_item_path`), pero `first_seen_at` y `observations_count` se preservan.
+- **Mismo contenido, IDs distintos**: se etiqueta con `exact_content_hash` — **nada se elimina**.
+- **Posibles duplicados entre inmobiliarias**: clave bucketed conservadora `(property_type, neighborhood_normalized, bedrooms, total_area_m2 // 5 m², price_usd // 50 USD)` que emite `possible_duplicate_group_id` y una fila por candidato en `duplicate_candidates.parquet`. Nunca se elimina del canonical.
+
+Motivación: en esta fase no hay evidencia de matching semántico confiable ni fuzzy matching probado. Eliminar automáticamente introduce falsos positivos silenciosos. La política es "marcar y auditar".
+
+## Prevención de leakage
+
+`model_ready.parquet` está cerrado a cualquier columna derivada del target `price_usd`: `price_per_m2`, `price_bucket`, `total_monthly_cost_usd` (que sí existe en el canonical, como campo informativo). La función `check_model_ready_leakage` corre antes de escribir el Parquet y termina la corrida con exit `1` si alguna forbidden column aparece.
+
+Motivación: `price_per_m2` es análisis útil (aparece en el `data_quality_report.json`), pero como feature de entrenamiento filtra el target y produce métricas de validación infladas. La regla es más simple de mantener que auditar cada feature manualmente.
+
 ## Primera consulta como fuente de trazabilidad
 
 Cada `run_items.query_id` guarda la **primera** consulta (dentro de esa corrida) que descubrió el `item_id`. Cuando el mismo ID aparece en una consulta posterior:
