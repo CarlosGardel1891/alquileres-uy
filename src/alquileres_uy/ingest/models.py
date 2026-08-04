@@ -101,6 +101,7 @@ class SourceGateReport:
     categories_observed: list[str] = field(default_factory=list)
     available_filters: list[str] = field(default_factory=list)
     reported_total: int | None = None
+    verified_category_ids: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -115,4 +116,37 @@ class SourceGateReport:
             "categories_observed": list(self.categories_observed),
             "available_filters": list(self.available_filters),
             "reported_total": self.reported_total,
+            "verified_category_ids": dict(self.verified_category_ids),
         }
+
+
+@dataclass(frozen=True)
+class ApprovedSourceContract:
+    """Signed contract emitted by the source gate when it decides APPROVED.
+
+    Loaded before an ingestion run. Guarantees that both the decision and
+    the coverage evidence (report_sha256) are internally consistent, and
+    exposes the *only* verified category ids the pipeline may use.
+    """
+
+    source: str
+    site_id: str
+    decision: str
+    created_at: str
+    category_ids: dict[str, str]
+    available_filters: list[str]
+    operation_filter: dict[str, Any]
+    coverage: dict[str, Any]
+    report_path: str
+    report_sha256: str
+
+
+@dataclass(frozen=True)
+class ItemDiscovery:
+    """First-seen metadata for an item within a single run."""
+
+    item_id: str
+    query_id: str
+    segment_key: str
+    position: int
+    page_index: int

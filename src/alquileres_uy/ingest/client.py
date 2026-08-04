@@ -96,6 +96,9 @@ class MercadoLibreClient:
     def get_category_attributes(self, category_id: str) -> Response:
         return self._request("GET", f"/categories/{category_id}/attributes")
 
+    def get_site_categories(self, site_id: str) -> Response:
+        return self._request("GET", f"/sites/{site_id}/categories")
+
     # ---- internals -----------------------------------------------------
 
     def _request(
