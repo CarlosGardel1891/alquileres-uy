@@ -55,7 +55,10 @@ def build_initial_plan(
             f"property categories: {', '.join(missing)}"
         )
     segments: list[QuerySegment] = []
-    for property_type, category_id in sorted(contract.category_ids.items()):
+    # Iterate only over the required property types so a tampered approval
+    # cannot inject an extra segment (e.g. "garage").
+    for property_type in sorted(REQUIRED_PROPERTY_TYPES):
+        category_id = contract.category_ids[property_type]
         if not category_id:
             raise ValueError(f"cannot build query plan: category id for {property_type} is empty")
         parameters = {
