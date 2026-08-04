@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Project data
+data/raw/*
+data/processed/*
+data/model/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/model/.gitkeep
+
+# Model artifacts
+artifacts/*
+!artifacts/.gitkeep
+
+# Logs and local databases
+*.log
+*.sqlite
+*.sqlite3
