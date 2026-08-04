@@ -1,0 +1,20 @@
+{
+  "application_version": "0.1.0",
+  "authentication": {
+    "token_used": false
+  },
+  "config": {
+    "max_items": 5000,
+    "requests_per_second": 2,
+    "timeout_seconds": 20
+  },
+  "files": [],
+  "finished_at": "2026-08-04T22:15:00Z",
+  "query_plan_hash": "fixture-hash",
+  "run_id": "fixture-run-001",
+  "site_id": "MLU",
+  "source": "mercadolibre",
+  "started_at": "2026-08-04T22:00:00Z",
+  "status": "completed",
+  "summary_path": "ingestion_summary.json"
+}
