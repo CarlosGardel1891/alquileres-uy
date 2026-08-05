@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from alquileres_uy.models.lightgbm_model import LightGBMModel, fit_lightgbm
+from alquileres_uy.models.lightgbm_model import LightGBMModel, tune_lightgbm
 
 
 def test_hyperparameters_selected_from_validation(temporal_split_fixture):
-    model = fit_lightgbm(
+    model = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -19,13 +19,13 @@ def test_hyperparameters_selected_from_validation(temporal_split_fixture):
 
 
 def test_deterministic_seed(temporal_split_fixture):
-    a = fit_lightgbm(
+    a = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
         seed=42,
     )
-    b = fit_lightgbm(
+    b = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -37,7 +37,7 @@ def test_deterministic_seed(temporal_split_fixture):
 
 
 def test_early_stopping_reports_best_iteration(temporal_split_fixture):
-    model = fit_lightgbm(
+    model = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -49,7 +49,7 @@ def test_early_stopping_reports_best_iteration(temporal_split_fixture):
 
 
 def test_predictions_are_finite_and_non_negative(temporal_split_fixture):
-    model = fit_lightgbm(
+    model = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -61,7 +61,7 @@ def test_predictions_are_finite_and_non_negative(temporal_split_fixture):
 
 
 def test_feature_importance_non_empty(temporal_split_fixture):
-    model = fit_lightgbm(
+    model = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -72,7 +72,7 @@ def test_feature_importance_non_empty(temporal_split_fixture):
 
 
 def test_unknown_neighborhood_still_predicts(temporal_split_fixture):
-    model = fit_lightgbm(
+    model = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -85,7 +85,7 @@ def test_unknown_neighborhood_still_predicts(temporal_split_fixture):
 
 
 def test_joblib_round_trip(temporal_split_fixture, tmp_path):
-    model = fit_lightgbm(
+    model = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -99,7 +99,7 @@ def test_joblib_round_trip(temporal_split_fixture, tmp_path):
 
 
 def test_n_jobs_is_one(temporal_split_fixture):
-    model = fit_lightgbm(
+    model = tune_lightgbm(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",

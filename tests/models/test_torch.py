@@ -12,7 +12,7 @@ torch = pytest.importorskip("torch", reason="torch is not installed")
 from alquileres_uy.models.torch_model import (  # noqa: E402
     TorchNotAvailableError,
     TorchTabularModel,
-    fit_torch_model,
+    tune_torch_model,
 )
 
 pytestmark = pytest.mark.torch
@@ -29,7 +29,7 @@ def _small_config(fixture):
 
 
 def test_forward_pass_shape(temporal_split_fixture):
-    model = fit_torch_model(
+    model = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
@@ -40,7 +40,7 @@ def test_forward_pass_shape(temporal_split_fixture):
 
 
 def test_early_stopping_records_best_epoch(temporal_split_fixture):
-    model = fit_torch_model(
+    model = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
@@ -50,7 +50,7 @@ def test_early_stopping_records_best_epoch(temporal_split_fixture):
 
 
 def test_training_history_records_losses(temporal_split_fixture):
-    model = fit_torch_model(
+    model = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
@@ -61,7 +61,7 @@ def test_training_history_records_losses(temporal_split_fixture):
 
 
 def test_state_dict_round_trip(temporal_split_fixture, tmp_path):
-    original = fit_torch_model(
+    original = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
@@ -75,7 +75,7 @@ def test_state_dict_round_trip(temporal_split_fixture, tmp_path):
 
 
 def test_predictions_are_non_negative(temporal_split_fixture):
-    model = fit_torch_model(
+    model = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
@@ -85,7 +85,7 @@ def test_predictions_are_non_negative(temporal_split_fixture):
 
 
 def test_unknown_categories_map_to_index_zero(temporal_split_fixture):
-    model = fit_torch_model(
+    model = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
@@ -97,7 +97,7 @@ def test_unknown_categories_map_to_index_zero(temporal_split_fixture):
 
 
 def test_eligible_for_api_serving_is_false(temporal_split_fixture):
-    model = fit_torch_model(
+    model = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
@@ -106,7 +106,7 @@ def test_eligible_for_api_serving_is_false(temporal_split_fixture):
 
 
 def test_cpu_only(temporal_split_fixture):
-    model = fit_torch_model(
+    model = tune_torch_model(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         **_small_config(temporal_split_fixture),
