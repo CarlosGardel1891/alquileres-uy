@@ -88,6 +88,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements-dev.txt
+            requirements-ingest.txt
             requirements-etl.txt
             requirements-train.txt
             requirements-torch-cpu.txt
@@ -97,6 +98,9 @@ jobs:
 
       - name: Install development dependencies
         run: pip install -r requirements-dev.txt
+
+      - name: Install ingestion dependencies
+        run: pip install -r requirements-ingest.txt
 
       - name: Install ETL dependencies
         run: pip install -r requirements-etl.txt
