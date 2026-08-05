@@ -297,7 +297,8 @@ Estado: **`MODEL_CONTRACT_READY`** (fixture). No existen resultados reales del p
 5. **Test metrics** — se calculan una única vez con los final models.
 6. **Residual interval** — se calcula sobre validation usando el tuning
    model del serving candidate.
-7. **Serving bundle** — contiene el final model.
+7. **Serving bundle** — contiene el final model. El bundle exige exactamente los cinco archivos (`model.joblib`, `metadata.json`, `feature_schema.json`, `residual_interval.json`, `checksums.json`); `checksums.json` cubre exactamente los cuatro payloads; `deployable` debe ser bool real y coherente con `data_mode`.
+8. **`bathrooms` opcional** — helper compartido de imputación: mediana del fit frame cuando hay observaciones; fallback `0.0` cuando la columna está ausente o completamente vacía. Consistente entre clásico y PyTorch, sin mirar validation ni test.
 
 **Cuatro modelos entrenados y comparados**:
 

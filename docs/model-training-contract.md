@@ -85,16 +85,30 @@ exit code **2** without dumping a stack trace.
 
 ## Bathrooms imputation
 
-* Classical branch (`build_preprocessor`) — `SimpleImputer(strategy="median")`
-  fit on the training partition during tuning, and on `train + validation`
-  during the final refit.
-* PyTorch branch (`build_torch_vocabularies`) — records the fit-frame
-  **median** in `numeric_impute_values["bathrooms"]`; standardisation
-  statistics are computed on the imputed series so training and inference
-  see the same distribution.
+`bathrooms` is optional at the Parquet level. When the column is
+absent, or present with **every value null**, both model families use
+the shared fallback described here — never inspecting validation or
+test.
 
-`numeric_impute_values` is exported in `vocabularies.json` and
-`numeric_scaler.json` for the torch model.
+* Classical branch (`build_preprocessor`) — `SimpleImputer(
+  strategy="median", keep_empty_features=True)` fit on the training
+  partition during tuning, and on `train + validation` during the
+  final refit. `keep_empty_features=True` preserves the feature slot
+  even when the fit frame has no observations for it; sklearn 1.6
+  falls back to 0.0 for such columns, matching the shared helper.
+* PyTorch branch (`build_torch_vocabularies`) — delegates to
+  `resolve_numeric_imputation_values`:
+  - if at least one observation exists in the fit frame → use its
+    **median** (`imputation_sources = "fit_frame_median"`);
+  - if every value is null → use the constant **0.0**
+    (`imputation_sources = "constant_fallback_no_observed_values"`).
+  The chosen value is stored in `numeric_impute_values`;
+  standardisation statistics are computed on the already-imputed
+  series so training and inference see the same distribution. When
+  the column is entirely missing, `mean = 0.0` and `std = 1.0`.
+
+`numeric_impute_values` and `imputation_sources` are exported in
+`vocabularies.json` and `numeric_scaler.json` for the torch model.
 
 ## Real-mode approval
 

@@ -393,3 +393,15 @@ El protocolo original re-entrenaba Ridge y LightGBM con `train + validation` y l
 - worst_errors del serving candidate en test/final_refit.
 
 Motivación: las métricas fixture anteriores eran inválidas (LightGBM caía de 38.78 → 80.23 en validation al eliminar el leak). El pipeline honesto no admite atajos.
+
+
+## Correcciones finales del review Fase 3
+
+Cambios mínimos aplicados sobre `tune-then-refit-v2`:
+
+- **Cobertura exacta del serving bundle**: `REQUIRED_BUNDLE_PAYLOAD_FILES` y `REQUIRED_BUNDLE_FILES` son la única fuente. `checksums.json` debe declarar los cuatro payloads exactamente; el directorio debe contener sólo los cinco archivos. Subdirs, symlinks y extras se rechazan antes de leer metadata. `build_serving_bundle` construye `checksums.json` desde la constante — no enumera el directorio.
+- **Consistencia `data_mode` / `deployable`**: `deployable` debe ser bool real (no `0`, `1`, `"true"`, null) y estrictamente igual a `data_mode == "real"`. Incoherencias (`fixture + true`, `real + false`) se rechazan.
+- **Bathrooms opcional con fallback 0.0**: helper `resolve_numeric_imputation_values` compartido entre clásico y PyTorch. Mediana cuando hay observaciones; `0.0` cuando el fit frame no tiene ninguna. Clásico usa `SimpleImputer(keep_empty_features=True)`. Torch registra `imputation_sources` en `vocabularies.json` / `numeric_scaler.json`.
+- **Test perturbation con Torch**: nuevo test marcado `@pytest.mark.torch` que usa los IDs reales de test extraídos del `predictions.parquet` (no un índice aproximado). Verifica que validation MAE, best_epoch, hiperparámetros, selection y residual interval permanecen idénticos.
+- **Real-mode ephemeral test**: `test_real_mode_lineage_contains_exact_approval_hash` promueve la fixture a real bajo `tmp_path`, genera un approval sintético con hashes reales, corre el pipeline y verifica que `inputs_sha256["etl_approval"]` coincide con `sha256(approval_path.read_bytes())`. Nunca versiona un approval real.
+- **Runtime mismatches**: cobertura parametrizada de NumPy, pandas, scikit-learn y joblib más dos casos específicos para LightGBM (versión ausente y runtime ausente). Todos monkeypatchean `joblib.load` y assertean call-count 0.
