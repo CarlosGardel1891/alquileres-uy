@@ -78,6 +78,44 @@ metadata always carries `deployable=false`. `load_serving_bundle()`
 refuses fixture bundles by default; tests opt in explicitly with
 `allow_fixture=True`.
 
+## Exact bundle set
+
+The bundle directory contains **exactly** these five files, nothing else:
+
+```
+model.joblib
+metadata.json
+feature_schema.json
+residual_interval.json
+checksums.json
+```
+
+The set is exported as `REQUIRED_BUNDLE_FILES` (loader) and
+`REQUIRED_BUNDLE_PAYLOAD_FILES` (the four files covered by checksums).
+The bundle must have no subdirectories, no symlinks, no hidden files,
+no `.tmp`, no `metadata.backup.json`, no `debug.json`, no `torch/`.
+
+## Checksum coverage
+
+`checksums.json` maps **exactly** the four payload files to their
+sha256 hex digest. Missing or extra entries are rejected with an
+actionable message (`checksums.json is missing required entries: [...]`,
+`checksums.json contains unexpected entries: [...]`). The set of
+physical files inside the bundle must also match
+`REQUIRED_BUNDLE_FILES` exactly (`serving bundle contains undeclared
+files: [...]`, `serving bundle contains an unexpected directory: '...'`).
+`build_serving_bundle` builds `checksums.json` from the constant list —
+never by enumerating the directory — so a builder regression that drops
+a payload from the checksums is impossible.
+
+## Deployability consistency
+
+`metadata.data_mode` must be exactly `fixture` or `real`.
+`metadata.deployable` must be a **real Python bool** (not `0`, `1`,
+`"true"`, null…) and must equal `data_mode == "real"`. Any drift
+(`fixture` + `true`, `real` + `false`, `deployable=null`, unknown
+`data_mode`) is rejected before `joblib.load`.
+
 ## Runtime compatibility check
 
 `validate_runtime_compatibility(metadata)` compares Python major/minor,
@@ -88,11 +126,13 @@ omits any of them is rejected. Any mismatch raises `ServingBundleError`.
 
 **Load order** (`load_serving_bundle`):
 
-1. resolve directory and confirm every required file is present;
-2. read `checksums.json`, validate names + hex hashes, verify every
-   file's SHA-256;
+1. resolve directory and confirm it is a real directory;
+2. call `validate_serving_bundle_integrity`, which enforces the exact
+   file set (rejecting subdirs, symlinks, extras) then verifies every
+   sha256 in `checksums.json`;
 3. read `metadata.json` and check `bundle_version`, `model_type`,
-   `data_mode`, `model_artifact_sha256`;
+   `data_mode`, `deployable` boolean, deployability coherence, and
+   `model_artifact_sha256`;
 4. reject fixture bundles unless `allow_fixture=True`;
 5. call `validate_runtime_compatibility(metadata)`;
 6. **only then** invoke `joblib.load(model.joblib)`.
