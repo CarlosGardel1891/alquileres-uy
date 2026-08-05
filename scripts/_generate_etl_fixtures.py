@@ -183,24 +183,15 @@ def main() -> None:
     batch_1 = items[:15]
     batch_2 = items[15:] + envelope_failures
 
-    (items_dir / "batch_0001.json").write_text(
-        json.dumps(batch_1, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    (items_dir / "batch_0002.json").write_text(
-        json.dumps(batch_2, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    _write_json_lf(items_dir / "batch_0001.json", batch_1)
+    _write_json_lf(items_dir / "batch_0002.json", batch_2)
 
     for i in (1, 2, 3):
         body = {
             "plain_text": f"Descripcion del item {i}",
             "text": f"<p>Descripcion del item {i}</p>",
         }
-        (descriptions_dir / f"MLU_TEST_{i:03d}.json").write_text(
-            json.dumps(body, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        _write_json_lf(descriptions_dir / f"MLU_TEST_{i:03d}.json", body)
 
     file_entries = _describe_files(root)
     manifest = {
@@ -217,10 +208,7 @@ def main() -> None:
         "files": file_entries,
         "summary_path": "ingestion_summary.json",
     }
-    (root / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    _write_json_lf(root / "manifest.json", manifest)
 
     summary = {
         "run_id": "fixture-run-001",
@@ -230,12 +218,15 @@ def main() -> None:
         "items_downloaded": len(items),
         "descriptions_downloaded": 3,
     }
-    (root / "ingestion_summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    _write_json_lf(root / "ingestion_summary.json", summary)
 
     print(f"generated {len(items)} items across 2 batches")
+
+
+def _write_json_lf(path: Path, payload) -> None:
+    """Write ``payload`` as JSON with LF line endings and a trailing newline."""
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    path.write_bytes(text.encode("utf-8"))
 
 
 def _describe_files(root: Path) -> list[dict[str, str]]:
