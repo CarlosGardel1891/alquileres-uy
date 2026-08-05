@@ -235,36 +235,35 @@ def _validate_model_ready(path: Path, schema: dict[str, Any]) -> pd.DataFrame:
             f"model_ready.parquet contains forbidden columns: {forbidden_present}"
         )
 
-    # source_item_id: string, no empties, unique.
-    ids = frame["source_item_id"]
-    if ids.isnull().any() or (ids.astype(str).str.strip() == "").any():
-        raise TrainingInputError("source_item_id must be a non-empty string for every row")
-    if ids.duplicated().any():
+    # source_item_id: real string instances (no int/bool/bytes/etc.),
+    # non-empty when trimmed, unique across rows.
+    _require_string_column(frame["source_item_id"], "source_item_id")
+    if frame["source_item_id"].duplicated().any():
         raise TrainingInputError("source_item_id must be unique in model_ready.parquet")
 
-    # property_type + neighborhood_normalized: non-empty categorical strings.
-    if frame["property_type"].isnull().any():
-        raise TrainingInputError("property_type has null values")
+    # property_type must be a real string with one of the allowed values.
+    _require_string_column(frame["property_type"], "property_type")
     invalid_types = set(frame["property_type"].unique()) - {"apartment", "house"}
     if invalid_types:
         raise TrainingInputError(
             f"property_type contains unknown categories: {sorted(invalid_types)}"
         )
-    if frame["neighborhood_normalized"].isnull().any():
-        raise TrainingInputError("neighborhood_normalized has null values")
 
-    # bedrooms: numeric, no negatives, no nulls.
-    bedrooms = pd.to_numeric(frame["bedrooms"], errors="coerce")
-    if bedrooms.isnull().any():
-        raise TrainingInputError("bedrooms must be numeric with no null values")
-    if (bedrooms < 0).any():
-        raise TrainingInputError("bedrooms must be non-negative")
+    # neighborhood_normalized must also be a real, non-empty string.
+    _require_string_column(frame["neighborhood_normalized"], "neighborhood_normalized")
 
-    # bathrooms is optional but if present, non-negative when non-null.
+    # bedrooms: numeric, finite, no negatives, no nulls.
+    _require_finite_non_negative(frame["bedrooms"], "bedrooms", allow_null=False)
+
+    # bathrooms is optional at the parquet level. When present, values may
+    # be null but any non-null value must be a real finite non-negative
+    # number. When absent, downstream code injects an all-NaN column so
+    # the classical imputer and the PyTorch median can operate on it.
     if "bathrooms" in frame.columns:
-        baths = pd.to_numeric(frame["bathrooms"], errors="coerce")
-        if (baths.dropna() < 0).any():
-            raise TrainingInputError("bathrooms must be non-negative when present")
+        _require_finite_non_negative(frame["bathrooms"], "bathrooms", allow_null=True)
+    else:
+        frame = frame.copy()
+        frame["bathrooms"] = pd.array([pd.NA] * len(frame), dtype="Float64")
 
     # total_area_m2 / price_usd: strictly positive, finite.
     for column in ("total_area_m2", TARGET_COLUMN):
@@ -383,6 +382,38 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise TrainingInputError(f"{label} root must be a JSON object")
     return data
+
+
+def _require_string_column(series: pd.Series, name: str) -> None:
+    """Enforce that every value in ``series`` is a real, non-empty string."""
+    for value in series.tolist():
+        if not isinstance(value, str):
+            raise TrainingInputError(
+                f"{name} must contain string values; got {type(value).__name__}"
+            )
+        if not value.strip():
+            raise TrainingInputError(f"{name} must not be empty or whitespace-only")
+
+
+def _require_finite_non_negative(series: pd.Series, name: str, *, allow_null: bool) -> None:
+    """Enforce that ``series`` is numeric-castable, finite, and ≥ 0."""
+    for raw in series.tolist():
+        if raw is None or (isinstance(raw, float) and math.isnan(raw)) or raw is pd.NA:
+            if allow_null:
+                continue
+            raise TrainingInputError(f"{name} must be numeric with no null values")
+        if isinstance(raw, bool):  # bool is an int subclass — reject explicitly.
+            raise TrainingInputError(f"{name} must be numeric; got bool")
+        try:
+            as_float = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise TrainingInputError(
+                f"{name} must contain finite numeric values; got {raw!r}"
+            ) from exc
+        if not math.isfinite(as_float):
+            raise TrainingInputError(f"{name} contains non-finite values (NaN or Infinity)")
+        if as_float < 0:
+            raise TrainingInputError(f"{name} must be non-negative")
 
 
 def _parse_aware(value: object) -> datetime | None:
