@@ -530,6 +530,7 @@ def test_missing_checksums_file(model_etl_run_dir, isolated_output_dir):
         load_serving_bundle(bundle, allow_fixture=True)
 
 
+@pytest.mark.torch
 def test_pytorch_never_becomes_serving_model(model_etl_run_dir, isolated_output_dir):
     result = pipeline_run(_base_config(model_etl_run_dir, isolated_output_dir, include_torch=True))
     metadata = json.loads(
