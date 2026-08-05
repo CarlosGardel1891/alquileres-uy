@@ -434,7 +434,6 @@ def test_load_bundle_rejects_missing_versions(model_etl_run_dir, isolated_output
     bundle = _make_bundle(model_etl_run_dir, isolated_output_dir)
     metadata_path = bundle / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["deployable"] = True
     metadata["versions"] = {}
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     # Rewrite checksums for the tampered metadata so the failure is
@@ -453,7 +452,6 @@ def test_load_bundle_rejects_python_mismatch(model_etl_run_dir, isolated_output_
     metadata_path = bundle / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata["versions"]["python"] = "99.99"
-    metadata["deployable"] = True
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     _rewrite_checksums(bundle)
 
@@ -469,7 +467,6 @@ def test_load_bundle_rejects_joblib_mismatch(model_etl_run_dir, isolated_output_
     metadata_path = bundle / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata["versions"]["joblib"] = "99.0"
-    metadata["deployable"] = True
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     _rewrite_checksums(bundle)
 
@@ -486,7 +483,6 @@ def test_load_bundle_rejects_bad_model_artifact_hash(
     bundle = _make_bundle(model_etl_run_dir, isolated_output_dir)
     metadata_path = bundle / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["deployable"] = True
     metadata["model_artifact_sha256"] = "0" * 64
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     _rewrite_checksums(bundle)
