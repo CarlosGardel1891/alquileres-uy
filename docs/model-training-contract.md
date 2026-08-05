@@ -1,9 +1,44 @@
 # Model Training Contract (Fase 3)
 
-This document is the source of truth for how the training pipeline
-consumes an ETL run and turns it into a versioned bundle of artifacts.
-Every rule listed here is enforced by code and by tests in
-`tests/models/`.
+Source of truth for how the training pipeline consumes an ETL run and
+turns it into a versioned bundle of artifacts. Every rule listed here
+is enforced by code and by tests in `tests/models/`.
+
+## Training protocol
+
+**Protocol version: `tune-then-refit-v2`.**
+
+The pipeline runs in strict stages so validation stays out-of-sample:
+
+1. **Tuning stage** — every candidate is fit on the training partition
+   only. Ridge picks its alpha on validation MAE; LightGBM tunes its
+   grid + `best_iteration` on validation with early stopping; PyTorch
+   trains with validation as the early-stopping signal and restores
+   the best state; baseline computes its medians on train.
+2. **Validation metrics** — computed with the tuning models. These
+   metrics are the exclusive input to selection. Nothing peeks at test.
+3. **Selection** — see below.
+4. **Final refit** — fresh models built with the frozen tuning
+   configuration are fit on `train + validation`:
+   - baseline: recompute medians on `train + validation`;
+   - Ridge: same alpha, new pipeline;
+   - LightGBM: same hyperparameters and `n_estimators = best_iteration`,
+     no eval_set (test is never observed);
+   - PyTorch: fresh vocabularies, scaler and module; same seed and
+     architecture; train exactly `final_epochs = best_epoch + 1` epochs.
+5. **Test metrics** — computed once from the final models.
+6. **Residual interval** — computed on validation using the **tuning**
+   model of the serving candidate. The interval therefore reflects the
+   out-of-sample error of the model configuration that goes to
+   production. The final refit predicts, the tuning residuals bound.
+7. **Serving bundle** — contains the *final* serving candidate.
+8. **`predictions.parquet`** — includes train / validation / test rows
+   for every candidate, with a `model_stage` column identifying which
+   object produced each row (`tuning_model` for train + validation,
+   `final_refit` for test).
+
+`tuning_model.train_row_count == len(train)`;
+`final_model.train_row_count == len(train + validation)`.
 
 ## Input contract
 
@@ -33,14 +68,33 @@ schema.json
   `source_item_id, property_type, neighborhood_normalized, bedrooms,
   total_area_m2, price_usd, date_created`;
 * the Parquet passes the model-ready data contract:
-  strings non-empty and unique for `source_item_id`; `property_type ∈
-  {apartment, house}`; `neighborhood_normalized` non-null; `bedrooms`
-  numeric and non-negative; `bathrooms` (optional) non-negative; area
-  and price finite and strictly positive; `date_created` tz-aware
-  (normalized to UTC on load).
+  * `source_item_id` — every value is a real `str` (not an int, bool,
+    bytes or None), non-empty when trimmed, unique across rows;
+  * `property_type` — real string, exactly `apartment` or `house`;
+  * `neighborhood_normalized` — real string, non-empty when trimmed;
+  * `bedrooms` — finite number, non-negative, no nulls;
+  * `bathrooms` — **optional column**. When present, non-null values
+    must be finite and non-negative; nulls are accepted. When the
+    column is absent, the loader injects an all-NaN column internally
+    without mutating the Parquet on disk;
+  * `total_area_m2`, `price_usd` — finite and strictly greater than zero;
+  * `date_created` — timezone-aware (normalized to UTC on load).
 
 Any failure raises `TrainingInputError`. The CLI translates that to
 exit code **2** without dumping a stack trace.
+
+## Bathrooms imputation
+
+* Classical branch (`build_preprocessor`) — `SimpleImputer(strategy="median")`
+  fit on the training partition during tuning, and on `train + validation`
+  during the final refit.
+* PyTorch branch (`build_torch_vocabularies`) — records the fit-frame
+  **median** in `numeric_impute_values["bathrooms"]`; standardisation
+  statistics are computed on the imputed series so training and inference
+  see the same distribution.
+
+`numeric_impute_values` is exported in `vocabularies.json` and
+`numeric_scaler.json` for the torch model.
 
 ## Real-mode approval
 
@@ -96,63 +150,47 @@ Algorithm (`split.temporal_split`, version `temporal-grouped-v1`):
    * no `source_item_id` appears in more than one partition;
    * at least three unique timestamps overall.
 
-`split_manifest.json` is emitted with strategy/algorithm version, seed,
-requested and actual fractions, row counts, per-split date ranges,
-cutoffs, per-split id-hashes, plus explicit `shuffle=false` and
-`same_timestamp_kept_together=true` flags.
-
-## Models
-
-| Model     | Family                        | Serialization           | Serving eligible |
-| --------- | ----------------------------- | ----------------------- | ---------------- |
-| baseline  | median price per m² (by group)| `baseline.json`         | yes              |
-| linear    | Ridge (sklearn Pipeline)       | `linear.joblib`         | yes              |
-| lightgbm  | LightGBMRegressor              | `lightgbm.joblib`       | yes              |
-| torch     | Embedding + MLP (SmoothL1)     | `torch/state_dict.pt` + JSON side-cars | **no** — architecture decision |
-
-* Ridge tunes `alpha ∈ {0.1, 1.0, 10.0}` on validation MAE, then refits
-  on train + validation with the winning alpha.
-* LightGBM uses a fixed 4-cell grid (`learning_rate`, `num_leaves`,
-  `min_child_samples`) with `n_jobs=1`, `deterministic=True`, early
-  stopping on validation, then refits on train + validation with the
-  winning `best_iteration`.
-* PyTorch runs on CPU only, seeds `random / numpy / torch`, uses Adam
-  + SmoothL1Loss, `num_workers=0`, and early stopping on validation
-  MAE. State is restored to the best epoch. Serialization uses
-  `state_dict` + JSON side-cars (never a pickle).
-
-## Metrics
-
-`metrics.compute_metrics` returns MAE (USD), RMSE (USD), MAPE
-(fraction and percent), and rows. Targets must be strictly positive;
-zero/negative targets are rejected rather than hidden behind an
-epsilon. `improvement_vs_baseline = (baseline_mae - model_mae) /
-baseline_mae`.
-
 ## Selection
 
-`selection.select_models` picks two different models:
+* **best_overall_model** — smallest validation MAE across every trained
+  candidate (torch included). Ties break by validation MAPE, then by
+  model name. **Simplicity does not affect best-overall.**
+* **serving_candidate** — restricted to the classical models
+  (`baseline / linear / lightgbm`). Anchored to the smallest eligible
+  MAE: the practical-tie set is every model whose MAE is within
+  `SERVING_TIE_TOLERANCE = 5 USD` of that anchor. The simplest model
+  inside the practical-tie set wins (`baseline < linear < lightgbm`).
+  No chained tie logic — a model outside the tolerance from the
+  anchor cannot become the serving candidate even if it is inside the
+  tolerance of some intermediate model.
 
-* **best_overall_model** — smallest validation MAE across the four
-  candidates (torch included).
-* **serving_candidate** — smallest validation MAE among the classical
-  models only (baseline, linear, lightgbm). If a simpler model is
-  within `SERVING_TIE_TOLERANCE = 5 USD` of the current best, we
-  prefer the simpler one. `model_selection.json` records the criterion
-  and the reason each excluded model was left out.
+Test metrics never influence selection. `model_selection.json` records
+`best_eligible_mae`, `practical_tie_threshold`, `practical_tie_models`,
+`simplicity_order`, and the reason each excluded model was left out.
 
-Fixture bundles always ship `deployable=false` and
-`blocked_reason="fixture training run"`.
+## Predictions and residual semantics
+
+Convention: `residual = actual - predicted`.
+Therefore `absolute_error_usd = abs(residual)` and
+`percentage_error = absolute_error_usd / actual` — always ≥ 0.
+
+`predictions.parquet` contains one row per publication × model × split
+across train / validation / test. The `model_stage` column identifies
+which object produced each row: `tuning_model` for train + validation,
+`final_refit` for test.
+
+`worst_errors.csv` contains only test rows produced by the final refit
+of the serving candidate, sorted by `absolute_error_usd` descending.
 
 ## Reproducibility
 
 `set_global_seed(seed, include_torch=…)` seeds Python `random`, NumPy
 and (optionally) PyTorch. LightGBM inherits `deterministic=True`.
 `reproducibility.json` records seed, versions, thread counts,
-determinism flags, git commit, platform and the split algorithm
-version. Two runs with the same seed and configuration produce
-identical split id-hashes, hyperparameters, serving candidate, and
-metrics within tolerance.
+determinism flags, git commit, platform, split algorithm version, and
+training protocol version. Two runs with the same seed and
+configuration produce identical split id-hashes, hyperparameters,
+serving candidate, and validation metrics within tolerance.
 
 ## Failure modes
 
