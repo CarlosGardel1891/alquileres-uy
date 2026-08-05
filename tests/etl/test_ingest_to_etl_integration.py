@@ -126,6 +126,25 @@ def test_phase1_manifest_is_readable_by_phase2_loader(ingest_run_dir):
     assert summary_entry.kind == "report"
 
 
+def test_phase1_summary_path_and_timestamps_are_wired_end_to_end(ingest_run_dir):
+    """The Fase 1 manifest must satisfy every Fase 2 summary invariant."""
+    manifest = json.loads((ingest_run_dir / "manifest.json").read_text(encoding="utf-8"))
+    summary = json.loads((ingest_run_dir / "ingestion_summary.json").read_text(encoding="utf-8"))
+    # Exact-path invariant: summary_path is the root file, declared once as report.
+    assert manifest["summary_path"] == "ingestion_summary.json"
+    reports = [entry for entry in manifest["files"] if entry.get("kind") == "report"]
+    matching = [entry for entry in reports if entry["path"] == manifest["summary_path"]]
+    assert len(matching) == 1
+    # Timestamp invariant: both are present and match the manifest instant.
+    assert isinstance(summary.get("started_at"), str) and summary["started_at"]
+    assert isinstance(summary.get("finished_at"), str) and summary["finished_at"]
+    assert summary["started_at"] == manifest["started_at"]
+    assert summary["finished_at"] == manifest["finished_at"]
+    # And the loader accepts it without adaptations.
+    fixtures_root = ingest_run_dir.parents[1]
+    load_raw_run(ingest_run_dir, data_mode="fixture", fixtures_root=fixtures_root)
+
+
 def test_phase1_manifest_hashes_match_files(ingest_run_dir):
     manifest = json.loads((ingest_run_dir / "manifest.json").read_text(encoding="utf-8"))
     for entry in manifest["files"]:
