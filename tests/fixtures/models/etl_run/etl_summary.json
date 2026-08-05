@@ -1,0 +1,17 @@
+{
+  "canonical_items": 240,
+  "data_mode": "fixture",
+  "duplicate_candidates": 0,
+  "duration_seconds": 300.0,
+  "etl_run_id": "fixture-model-run-001",
+  "finished_at": "2026-01-01T00:05:00Z",
+  "input_items": 240,
+  "input_runs": 1,
+  "model_ready_items": 240,
+  "rejected_items": 0,
+  "schema_version": "1.0.0",
+  "started_at": "2026-01-01T00:00:00Z",
+  "status": "completed",
+  "strict": false,
+  "warning": "FIXTURE DATA \u2014 NOT PROJECT RESULTS"
+}

@@ -1,0 +1,27 @@
+{
+  "canonical_columns": [
+    "source_item_id",
+    "property_type",
+    "neighborhood_normalized",
+    "bedrooms",
+    "bathrooms",
+    "total_area_m2",
+    "price_usd",
+    "date_created"
+  ],
+  "model_ready_forbidden": [
+    "price_per_m2",
+    "price_bucket",
+    "total_monthly_cost_usd"
+  ],
+  "model_ready_required": [
+    "source_item_id",
+    "property_type",
+    "neighborhood_normalized",
+    "bedrooms",
+    "total_area_m2",
+    "price_usd",
+    "date_created"
+  ],
+  "schema_version": "1.0.0"
+}

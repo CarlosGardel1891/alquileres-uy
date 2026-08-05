@@ -47,9 +47,11 @@ data/model/*
 !data/processed/.gitkeep
 !data/model/.gitkeep
 
-# Model artifacts
+# Model artifacts (Fase 3 training runs are never committed).
 artifacts/*
 !artifacts/.gitkeep
+artifacts/models/**
+!artifacts/models/.gitkeep
 
 # Logs and local databases
 *.log
@@ -60,3 +62,4 @@ tests/fixtures/ingest_integration_*/
 tests/fixtures/etl_broken_*/
 tests/fixtures/etl_wrong_hash_*/
 tests/fixtures/etl_bad_unit_*/
+tests/fixtures/models/tmp_*/
