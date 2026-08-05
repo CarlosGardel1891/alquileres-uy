@@ -336,3 +336,43 @@ Motivación:
 - Permite reconstruir, para cada publicación, en qué segmento (barrio, precio, dormitorios) fue encontrada por primera vez. Es información imprescindible para diagnosticar la cobertura del plan.
 - Sin esta trazabilidad, dos plans distintos pueden producir el mismo inventario final sin que se pueda auditar cuál segmento aportó qué.
 - Deja `run_items.query_id` **no nulo** para todo ítem descargado correctamente, lo que simplifica los joins de análisis.
+
+
+## Fase 3 — Entrenamiento de modelos
+
+Estas decisiones enmarcan el pipeline de entrenamiento (`src/alquileres_uy/models/`).
+
+### Ridge como modelo lineal
+
+El "modelo lineal interpretable" del proyecto es Ridge (`sklearn.linear_model.Ridge`) con grid `alpha ∈ {0.1, 1.0, 10.0}` seleccionado por MAE de validation. Regresión sin regularización es inestable ante one-hot encoding con barrios raros; Ridge da coeficientes acotados sin destruir la interpretabilidad.
+
+### Split temporal (sin shuffle)
+
+Se usa un split temporal agrupado por `date_created` (`temporal-grouped-v1`). No se usa `train_test_split` ni ningún split aleatorio: el sistema debe entrenar con el pasado y validarse con el futuro, y filas con el mismo timestamp nunca cruzan splits. Un split que no cumpla las invariantes falla explícitamente; no hay degradación silenciosa.
+
+### PyTorch en CPU y separado del serving
+
+PyTorch participa en la comparación de métricas pero **no** entra al `serving_bundle/`. Motivo: el bundle futuro de FastAPI (Fase 4) no llevará runtime de Torch — pesa demás y el modelo tabular no gana lo suficiente sobre LightGBM en el fixture actual para justificarlo. `requirements-torch-cpu.txt` se instala solo cuando se pide `--include-torch`; la falta de la wheel devuelve exit 2 con mensaje claro.
+
+### LightGBM como candidato esperado, no garantizado
+
+LightGBM suele quedar por encima del baseline y del linear en el fixture, pero el pipeline no lo asume: el `serving_candidate` se elige por validation MAE (con preferencia por el modelo más simple ante empate práctico dentro de `SERVING_TIE_TOLERANCE = 5 USD`). Cualquiera de baseline/linear/lightgbm puede ganar según la corrida.
+
+### Best-overall vs. serving-candidate
+
+Se separan dos decisiones:
+
+- `best_overall_model` puede ser cualquiera de los cuatro (baseline / linear / lightgbm / torch).
+- `serving_candidate` solo puede ser clásico. Esto deja constancia de que Torch puede ganar en métricas sin obligar a servirlo, y evita mezclar "el mejor modelo" con "el modelo que se despliega".
+
+### Intervalo de predicción empírico (no CI estadístico)
+
+La API futura devolverá `[lower, upper]` alrededor de la predicción. Se calcula sobre los residuos de validation del `serving_candidate` (q10/q90). Es explícitamente etiquetado como `empirical residual interval` — no se afirma que sea un intervalo de confianza estadístico formal.
+
+### Sin MLflow ni Optuna
+
+Alcance conscientemente reducido: grids pequeños y fijos, resultados serializados como JSON/Parquet. MLflow y Optuna aportan valor cuando hay decenas de experimentos concurrentes; con cuatro familias y un puñado de hiperparámetros el overhead operativo no se justifica todavía.
+
+### PyTorch fuera de la API
+
+El serving bundle refuerza la exclusión: `build_serving_bundle` levanta `ServingBundleError` si se le pide empaquetar Torch; `metadata.json` deja constancia con `eligible_for_api_serving=false` en el side-car del modelo Torch.
