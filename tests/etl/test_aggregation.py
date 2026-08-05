@@ -28,6 +28,8 @@ def _write_run(root: Path, *, run_id: str, started: str, finished: str, items: l
             {
                 "run_id": run_id,
                 "status": "completed",
+                "started_at": started,
+                "finished_at": finished,
                 "items_downloaded": len(items),
                 "descriptions_downloaded": 0,
             }
