@@ -376,3 +376,20 @@ Alcance conscientemente reducido: grids pequeños y fijos, resultados serializad
 ### PyTorch fuera de la API
 
 El serving bundle refuerza la exclusión: `build_serving_bundle` levanta `ServingBundleError` si se le pide empaquetar Torch; `metadata.json` deja constancia con `eligible_for_api_serving=false` en el side-car del modelo Torch.
+
+### Correcciones review Fase 3 (tune-then-refit-v2)
+
+El protocolo original re-entrenaba Ridge y LightGBM con `train + validation` y luego calculaba validation metrics con ese modelo — fuga silenciosa. La revisión introdujo:
+
+- separación explícita entre `tune_*` (train-only) y `refit_*` (`train + validation`);
+- validation metrics y residual interval calculados con el tuning model;
+- test metrics calculadas una única vez con el final model;
+- selección anclada al menor MAE elegible (no encadenada);
+- `training_run_id` distinto de `etl_run_id`;
+- `training_config.json` hasheado dentro del lineage;
+- `load_serving_bundle` ejecuta `validate_runtime_compatibility` **antes** de `joblib.load` (tests con `joblib.load` monkey-patched aseguran call-count 0);
+- `source_item_id` exige instancia de `str`; barrio no vacío; bedrooms finito; bathrooms opcional en Parquet con imputación por mediana (ni el DataFrame ni el Parquet se modifican);
+- `residual = actual - predicted` en `predictions.parquet` (incluye train / validation / test con columna `model_stage`);
+- worst_errors del serving candidate en test/final_refit.
+
+Motivación: las métricas fixture anteriores eran inválidas (LightGBM caía de 38.78 → 80.23 en validation al eliminar el leak). El pipeline honesto no admite atajos.

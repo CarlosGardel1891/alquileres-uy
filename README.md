@@ -280,6 +280,25 @@ Cada corrida ETL escribe:
 
 Estado: **`MODEL_CONTRACT_READY`** (fixture). No existen resultados reales del proyecto — el modo real sigue bloqueado hasta que exista una corrida ETL con `data_mode == "real"` y un `etl_production_approval.json` firmado (`MODEL_PRODUCTION_VALIDATED`).
 
+**Protocolo `tune-then-refit-v2` (sin fuga de validation).**
+
+1. **Tuning** — cada modelo se ajusta únicamente con train; validation
+   se usa solo para elegir alpha (Ridge), grid + best_iteration
+   (LightGBM), early stopping (PyTorch), o simplemente medianas
+   (baseline).
+2. **Validation metrics** — se calculan con los tuning models
+   (out-of-sample por construcción). Son la única entrada a la
+   selección.
+3. **Selección** — `best_overall` por (MAE, MAPE, nombre);
+   `serving_candidate` anclado al menor MAE elegible con desempate por
+   simplicidad dentro de la tolerancia. Nada mira test.
+4. **Final refit** — modelos frescos con la configuración congelada
+   entrenan con `train + validation`. Test nunca se toca.
+5. **Test metrics** — se calculan una única vez con los final models.
+6. **Residual interval** — se calcula sobre validation usando el tuning
+   model del serving candidate.
+7. **Serving bundle** — contiene el final model.
+
 **Cuatro modelos entrenados y comparados**:
 
 1. **baseline** — mediana de precio por m² por (barrio, tipo) con cadena de fallback (barrio → tipo → global);

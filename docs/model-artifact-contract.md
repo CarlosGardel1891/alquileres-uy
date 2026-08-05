@@ -15,6 +15,7 @@ individual files.
 ├── dataset_profile.json
 ├── split_manifest.json
 ├── reproducibility.json
+├── training_config.json
 ├── training_summary.json
 ├── training_lineage.json
 ├── predictions.parquet
@@ -81,9 +82,23 @@ refuses fixture bundles by default; tests opt in explicitly with
 
 `validate_runtime_compatibility(metadata)` compares Python major/minor,
 NumPy, pandas, scikit-learn, joblib, and (when the bundle is a LightGBM
-one) LightGBM versions between the bundle and the current runtime. Any
-mismatch raises `ServingBundleError` — the loader will not silently
-deserialize a bundle from an incompatible environment.
+one) LightGBM versions between the bundle and the current runtime.
+**All of these version fields are required** — a bundle whose metadata
+omits any of them is rejected. Any mismatch raises `ServingBundleError`.
+
+**Load order** (`load_serving_bundle`):
+
+1. resolve directory and confirm every required file is present;
+2. read `checksums.json`, validate names + hex hashes, verify every
+   file's SHA-256;
+3. read `metadata.json` and check `bundle_version`, `model_type`,
+   `data_mode`, `model_artifact_sha256`;
+4. reject fixture bundles unless `allow_fixture=True`;
+5. call `validate_runtime_compatibility(metadata)`;
+6. **only then** invoke `joblib.load(model.joblib)`.
+
+If any of steps 1–5 fails, `joblib.load` is never reached — verified by
+tests that monkey-patch it and assert the call count remains zero.
 
 ## Lineage
 
