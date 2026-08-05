@@ -230,12 +230,30 @@ def test_load_serving_bundle_detects_checksum_tampering(tmp_path, temporal_split
         load_serving_bundle(bundle_dir, allow_fixture=True)
 
 
+def _full_versions(**overrides) -> dict:
+    import joblib as _joblib
+    import numpy as _np
+    import pandas as _pd
+    import sklearn as _sklearn
+
+    payload = {
+        "python": ".".join(map(str, __import__("sys").version_info[:2])),
+        "numpy": _np.__version__,
+        "pandas": _pd.__version__,
+        "scikit_learn": _sklearn.__version__,
+        "joblib": _joblib.__version__,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_runtime_compatibility_flags_python_mismatch():
-    metadata = {"versions": {"python": "99.0"}, "model_type": "baseline"}
+    metadata = {"versions": _full_versions(python="99.0"), "model_type": "baseline"}
     with pytest.raises(ServingBundleError, match="python"):
         validate_runtime_compatibility(metadata)
 
 
-def test_runtime_compatibility_ignores_missing_versions():
+def test_runtime_compatibility_rejects_missing_versions():
     metadata = {"versions": {}, "model_type": "baseline"}
-    validate_runtime_compatibility(metadata)  # must not raise
+    with pytest.raises(ServingBundleError, match="required"):
+        validate_runtime_compatibility(metadata)

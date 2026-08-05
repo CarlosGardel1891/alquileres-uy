@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from alquileres_uy.models.linear import LinearModel, fit_linear
+from alquileres_uy.models.linear import LinearModel, tune_linear
 
 
 def test_alpha_selected_from_validation(temporal_split_fixture):
-    model = fit_linear(
+    model = tune_linear(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -20,7 +20,7 @@ def test_alpha_selected_from_validation(temporal_split_fixture):
 
 
 def test_predictions_are_finite_and_non_negative(temporal_split_fixture):
-    model = fit_linear(
+    model = tune_linear(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -32,7 +32,7 @@ def test_predictions_are_finite_and_non_negative(temporal_split_fixture):
 
 
 def test_unknown_neighborhood_does_not_break_predict(temporal_split_fixture):
-    model = fit_linear(
+    model = tune_linear(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -45,7 +45,7 @@ def test_unknown_neighborhood_does_not_break_predict(temporal_split_fixture):
 
 
 def test_joblib_round_trip(temporal_split_fixture, tmp_path):
-    original = fit_linear(
+    original = tune_linear(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -60,7 +60,7 @@ def test_joblib_round_trip(temporal_split_fixture, tmp_path):
 
 
 def test_coefficients_summary_has_expected_shape(temporal_split_fixture):
-    model = fit_linear(
+    model = tune_linear(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
@@ -74,7 +74,7 @@ def test_coefficients_summary_has_expected_shape(temporal_split_fixture):
 
 
 def test_feature_names_include_categoricals(temporal_split_fixture):
-    model = fit_linear(
+    model = tune_linear(
         temporal_split_fixture.train,
         temporal_split_fixture.validation,
         target_column="price_usd",
