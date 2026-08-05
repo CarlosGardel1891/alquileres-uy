@@ -1,0 +1,11 @@
+{
+  "_comment": "EXAMPLE — this file is NOT a valid approval. All hashes are placeholders. Replace with real values and never commit real approval tokens.",
+  "status": "ETL_PRODUCTION_VALIDATED",
+  "data_mode": "real",
+  "etl_run_id": "REPLACE_WITH_REAL_ETL_RUN_ID",
+  "etl_summary_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "lineage_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "model_ready_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "approved_at": "2026-01-01T00:00:00+00:00",
+  "approved_by": "tl@example.com"
+}
