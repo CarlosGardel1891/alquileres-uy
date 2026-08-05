@@ -24,18 +24,21 @@ def _make_run(tmp_path: Path, *, started="2026-08-04T22:00:00Z", finished="2026-
     (tmp_path / "items").mkdir(exist_ok=True)
     batch = tmp_path / "items" / "batch_0001.json"
     batch.write_text(json.dumps([{"code": 200, "body": {"id": "MLU_TEST_1"}}]), encoding="utf-8")
+    summary_body = {
+        "run_id": "r1",
+        "status": "completed",
+        "items_downloaded": 1,
+        "descriptions_downloaded": 0,
+    }
+    # Mirror the manifest timestamps so the summary contract is satisfied
+    # whenever both are present. Tests that null out manifest timestamps
+    # target the manifest-level check, not the summary one.
+    if started is not None:
+        summary_body["started_at"] = started
+    if finished is not None:
+        summary_body["finished_at"] = finished
     summary_path = tmp_path / "ingestion_summary.json"
-    summary_path.write_text(
-        json.dumps(
-            {
-                "run_id": "r1",
-                "status": "completed",
-                "items_downloaded": 1,
-                "descriptions_downloaded": 0,
-            }
-        ),
-        encoding="utf-8",
-    )
+    summary_path.write_text(json.dumps(summary_body), encoding="utf-8")
     manifest = {
         "run_id": "r1",
         "source": "mercadolibre",

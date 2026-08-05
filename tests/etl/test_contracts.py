@@ -26,6 +26,8 @@ def _write_summary_file(root: Path, **overrides) -> Path:
     body = {
         "run_id": "r1",
         "status": "completed",
+        "started_at": "2026-08-04T22:00:00Z",
+        "finished_at": "2026-08-04T22:15:00Z",
         "items_downloaded": 1,
         "descriptions_downloaded": 0,
     }

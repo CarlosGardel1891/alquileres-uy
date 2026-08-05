@@ -173,6 +173,8 @@ def _make_run_with_bad_bedroom_unit(tmp_path):
             {
                 "run_id": "r-kg",
                 "status": "completed",
+                "started_at": "2026-08-04T22:00:00Z",
+                "finished_at": "2026-08-04T22:15:00Z",
                 "items_downloaded": 1,
                 "descriptions_downloaded": 0,
             }

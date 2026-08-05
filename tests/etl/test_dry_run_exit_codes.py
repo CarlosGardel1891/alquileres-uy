@@ -135,6 +135,8 @@ def test_dry_run_exit_2_on_wrong_hash(tmp_path, exchange_rate_path):
             {
                 "run_id": "r1",
                 "status": "completed",
+                "started_at": "2026-08-04T22:00:00Z",
+                "finished_at": "2026-08-04T22:15:00Z",
                 "items_downloaded": 1,
                 "descriptions_downloaded": 0,
             }

@@ -201,7 +201,7 @@ def test_missing_summary_path_declaration_is_rejected(tmp_path):
 
 def test_wrong_summary_path_target_is_rejected(tmp_path):
     _write_run(tmp_path, manifest_overrides={"summary_path": "other.json"})
-    with pytest.raises(RawRunValidationError, match="ingestion_summary.json"):
+    with pytest.raises(RawRunValidationError, match="summary_path"):
         load_raw_run(tmp_path, data_mode="fixture", fixtures_root=tmp_path)
 
 
