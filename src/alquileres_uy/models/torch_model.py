@@ -163,6 +163,7 @@ class TorchTabularModel:
                 "mean": self.vocabularies.numeric_mean,
                 "std": self.vocabularies.numeric_std,
                 "impute_values": self.vocabularies.numeric_impute_values,
+                "imputation_sources": self.vocabularies.imputation_sources,
                 "feature_order": list(NUMERIC_FEATURES),
             },
         )
@@ -207,6 +208,9 @@ class TorchTabularModel:
             numeric_std={str(k): float(v) for k, v in vocab_payload["numeric_std"].items()},
             numeric_impute_values={
                 str(k): float(v) for k, v in vocab_payload.get("numeric_impute_values", {}).items()
+            },
+            imputation_sources={
+                str(k): str(v) for k, v in vocab_payload.get("imputation_sources", {}).items()
             },
         )
         module = _build_module(config)
