@@ -121,20 +121,19 @@ def main(argv: list[str] | None = None) -> int:
             plan = pipeline.dry_run()
             print(json.dumps(plan, indent=2, ensure_ascii=False))
             return 0
-        try:
-            result = pipeline.run()
-        except ExchangeRateModeMismatch as exc:
-            logging.error("exchange rate data_mode mismatch: %s", exc)
-            return EXIT_CONFIG_ERROR
-        except InvalidExchangeRate as exc:
-            logging.error("invalid exchange rate: %s", exc)
-            return EXIT_CONFIG_ERROR
-        except (RawRunValidationError, InvalidAliasFile) as exc:
-            logging.error("invalid input: %s", exc)
-            return EXIT_CONFIG_ERROR
-        except StrictQualityGateError as exc:
-            logging.error("%s", exc)
-            return EXIT_SCHEMA_ERROR
+        result = pipeline.run()
+    except ExchangeRateModeMismatch as exc:
+        logging.error("exchange rate data_mode mismatch: %s", exc)
+        return EXIT_CONFIG_ERROR
+    except InvalidExchangeRate as exc:
+        logging.error("invalid exchange rate: %s", exc)
+        return EXIT_CONFIG_ERROR
+    except (RawRunValidationError, InvalidAliasFile) as exc:
+        logging.error("invalid input: %s", exc)
+        return EXIT_CONFIG_ERROR
+    except StrictQualityGateError as exc:
+        logging.error("%s", exc)
+        return EXIT_SCHEMA_ERROR
     except Exception:
         logging.exception("etl pipeline crashed")
         return EXIT_SCHEMA_ERROR
