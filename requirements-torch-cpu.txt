@@ -1,0 +1,4 @@
+# PyTorch CPU wheels — installed only when --include-torch is used.
+# Use the official CPU index to avoid pulling CUDA runtimes.
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
