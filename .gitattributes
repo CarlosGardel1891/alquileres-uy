@@ -1,0 +1,4 @@
+# Keep raw-run fixtures byte-stable across platforms so their manifest
+# SHA-256 hashes stay valid whether the repo is checked out on Windows
+# (CRLF-by-default) or Linux/macOS (LF).
+tests/fixtures/etl/** text eol=lf
