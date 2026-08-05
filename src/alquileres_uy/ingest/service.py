@@ -101,7 +101,48 @@ class _RunState:
     excluded_items: int = 0
     unknown_items: int = 0
     files: set[str] = field(default_factory=set)
+    file_kinds: dict[str, str] = field(default_factory=dict)
     field_coverage: dict[str, FieldCoverage] = field(default_factory=dict)
+
+
+def _kind_for(relative_path: str) -> str:
+    normalized = relative_path.replace("\\", "/")
+    if normalized.startswith("items/"):
+        return "item_batch"
+    if normalized.startswith("descriptions/"):
+        return "description"
+    if normalized.startswith("searches/"):
+        return "search_page"
+    if normalized.startswith("errors/"):
+        return "error_log"
+    return "report"
+
+
+def _track_file(state: _RunState, relative_path: str) -> None:
+    normalized = relative_path.replace("\\", "/")
+    state.files.add(normalized)
+    if normalized not in state.file_kinds:
+        state.file_kinds[normalized] = _kind_for(normalized)
+
+
+def _build_file_entries(state: _RunState, workdir: Path) -> list[dict[str, str]]:
+    """Return manifest.files entries for every tracked file, hashed just-in-time."""
+    import hashlib
+
+    entries: list[dict[str, str]] = []
+    for relative_path in sorted(state.files):
+        absolute = workdir / relative_path
+        if not absolute.is_file():
+            continue
+        digest = hashlib.sha256(absolute.read_bytes()).hexdigest()
+        entries.append(
+            {
+                "path": relative_path,
+                "kind": state.file_kinds.get(relative_path, "report"),
+                "sha256": digest,
+            }
+        )
+    return entries
 
 
 class IngestionService:
@@ -193,7 +234,8 @@ class IngestionService:
                 errors_by_status=repository.errors_by_status(run_id),
             )
             summary_path = write_summary(workdir, summary)
-            state.files.add("ingestion_summary.json")
+            _track_file(state, "ingestion_summary.json")
+            file_entries = _build_file_entries(state, workdir)
             manifest_path = write_manifest(
                 workdir,
                 run_id=run_id,
@@ -207,7 +249,7 @@ class IngestionService:
                 requests_per_second=self._config.requests_per_second,
                 request_timeout_seconds=self._config.request_timeout_seconds,
                 token_used=self._config.access_token is not None,
-                files=sorted(state.files),
+                files=file_entries,
             )
             self._log_summary(summary, duration)
             repository.close()
@@ -259,7 +301,7 @@ class IngestionService:
                     page_path, _ = atomic_write_json(
                         segment_dir / f"page_{page_index:04d}.json", page_data
                     )
-                    state.files.add(str(page_path.relative_to(workdir)))
+                    _track_file(state, str(page_path.relative_to(workdir)))
                     pages_downloaded += 1
                     reported_total = self._paging_total(page_data) or reported_total
 
@@ -336,7 +378,7 @@ class IngestionService:
                         "message": str(exc),
                     },
                 )
-                state.files.add(str(errors_path.relative_to(workdir)))
+                _track_file(state, str(errors_path.relative_to(workdir)))
             else:
                 state.queries_completed += 1
                 state.search_results_received += results_received
@@ -431,7 +473,7 @@ class IngestionService:
                 batch_path, _ = atomic_write_json(
                     items_dir / f"batch_{batch_index:04d}.json", batch_data
                 )
-                state.files.add(str(batch_path.relative_to(workdir)))
+                _track_file(state, str(batch_path.relative_to(workdir)))
             except IngestionError as exc:
                 state.errors += 1
                 state.items_failed += len(batch_ids)
@@ -454,7 +496,7 @@ class IngestionService:
                         "message": str(exc),
                     },
                 )
-                state.files.add(str(errors_path.relative_to(workdir)))
+                _track_file(state, str(errors_path.relative_to(workdir)))
                 continue
 
             if not isinstance(batch_data, list):
@@ -564,11 +606,11 @@ class IngestionService:
                             "message": str(exc),
                         },
                     )
-                    state.files.add(str(errors_path.relative_to(workdir)))
+                    _track_file(state, str(errors_path.relative_to(workdir)))
                 continue
             body = response.json()
             path, _ = atomic_write_json(descriptions_dir / f"{item_id}.json", body)
-            state.files.add(str(path.relative_to(workdir)))
+            _track_file(state, str(path.relative_to(workdir)))
             state.descriptions_downloaded += 1
 
     # -- helpers --------------------------------------------------------

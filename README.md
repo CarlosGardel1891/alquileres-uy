@@ -178,6 +178,83 @@ La ingesta es idempotente respecto a `item_id`. Correr dos veces con el mismo pl
 
 GitHub Actions **no** ejecuta la ingesta ni el source gate. Sólo instala dependencias y corre tests con fixtures locales (`ruff`, `pytest`, `pre-commit`, `build`).
 
+## ETL (Fase 2)
+
+El pipeline ETL transforma corridas crudas de ingesta en cuatro Parquet + JSON de trazabilidad bajo `data/processed/<timestamp>_<etl-run-id>/`. Detalle completo en `docs/etl-data-contract.md` y `docs/etl-quality-rules.md`.
+
+### Dependencias
+
+```bash
+pip install -r requirements-etl.txt
+```
+
+Trae `pandas==2.2.3`, `pyarrow==18.1.0`, `pandera==0.22.1`.
+
+### Modo fixture (CI + desarrollo)
+
+```bash
+python scripts/run_etl.py --fixture-mode \
+    --input-run-dir tests/fixtures/etl/raw_run \
+    --exchange-rate config/exchange_rate.example.json \
+    --neighborhood-aliases config/neighborhood_aliases.json \
+    --output-dir data/processed
+```
+
+Todos los outputs quedan marcados con `data_mode = "fixture"`. **Sus métricas no son resultados del proyecto** — el `data_quality_report.json` incluye un `warning` explícito al respecto.
+
+### Modo real (bloqueado hoy)
+
+Requiere una corrida real de ingesta y un `source_gate_approval.json` válido de la Fase 1:
+
+```bash
+python scripts/run_etl.py \
+    --input-run-dir data/raw/mercadolibre/<timestamp>_<run-id> \
+    --gate-approval data/raw/mercadolibre/source_gate/<...>/source_gate_approval.json \
+    --exchange-rate <path> \
+    --neighborhood-aliases config/neighborhood_aliases.json
+```
+
+Sin `--gate-approval` válido el CLI termina con exit code `2`, sin abrir sockets, sin crear SQLite, sin carpeta de corrida. Al día de hoy no existe approval real: el source gate sigue en `INCONCLUSIVE`, por lo que el modo real está **bloqueado por código**.
+
+### Outputs
+
+Cada corrida ETL escribe:
+
+- `listings.parquet` — dataset canónico (una fila por `source_item_id`).
+- `model_ready.parquet` — subconjunto estricto listo para entrenamiento (sin columnas derivadas del target).
+- `rejected_listings.parquet` — filas rechazadas con el motivo (`rejection_reasons`) en cada una.
+- `duplicate_candidates.parquet` — grupos conservadores de duplicados posibles entre inmobiliarias. **No** se eliminan filas del canonical.
+- `etl_summary.json`, `data_quality_report.json`, `unmapped_attributes.json`, `lineage.json`, `schema.json`.
+
+**Canonical vs. model-ready:** canonical acepta rows con opcionales faltantes (para no perder trazabilidad); model-ready exige `date_created`, `neighborhood_normalized`, `bedrooms`, `total_area_m2`, `price_usd`, `property_type` no nulos, superficie positiva y sin conflictos.
+
+### Datos
+
+`data/processed/**` y los Parquet no se versionan (ver `.gitignore`). Cada corrida escribe una carpeta nueva; ninguna corrida anterior se sobrescribe. La entrada cruda es de sólo lectura para el ETL.
+
+### Reproducibilidad y contratos
+
+- **Data mode de cotización**: el `data_mode` del archivo de exchange rate debe coincidir con el del ETL. Un ETL real con una tasa fixture termina con exit code 2 sin efectos. `retrieved_at` exige timezone explícito.
+- **Agregación temporal**: `first_seen_at` es el mínimo histórico de todas las observaciones del mismo `(source, source_item_id)`. `last_seen_at` es el máximo. `observations_count` refleja el total, y la fila canónica elegida (por `last_updated` → `last_seen_at` → `source_run_id` → `raw_item_path`) hereda estos agregados en lugar de sobrescribirlos.
+- **Timestamps deterministas**: `manifest.started_at` y `manifest.finished_at` son obligatorios, con timezone y `finished_at >= started_at`. El ETL nunca cae a `datetime.now()` como fallback de datos, y todas las filas de una corrida comparten el mismo `etl_processed_at` (el start del pipeline).
+- **Manifest autoritativo**: el ETL sólo procesa archivos declarados en `manifest.files` con `path`/`kind`/`sha256`. Cualquier archivo extra bajo `items/` o `descriptions/` no declarado, o un hash que no coincida, rechaza la corrida entera.
+- **Unidades de área**: `parse_area` sólo acepta `m²`/`m2`/`sqm`/`metros cuadrados`. Payloads como `{"number": 700, "unit": "ft²"}` producen `unsupported_area_unit` en `quality_issues` y excluyen la fila del `model_ready.parquet`.
+- **`--strict` real**: cuando se activa, cualquier fila rechazada, atributo no mapeado, fecha inválida, inconsistencia de superficie, gasto común con moneda no soportada, o `quality_issues` no vacío hace fallar la corrida con exit 1 antes de escribir el output.
+- **Lineage completo**: `lineage.json` se escribe **último** e incluye SHA-256 de `manifest.json`, `ingestion_summary.json`, cada batch y descripción declarados, los cuatro Parquet, `etl_summary.json`, `data_quality_report.json`, `unmapped_attributes.json` y `schema.json`. Contiene `"lineage_self_hashed": false` porque no puede hashearse a sí mismo.
+- **Publicación atómica**: la corrida se escribe en `<workdir>.tmp` y sólo al final se renombra al directorio final. Si algún paso falla — **incluyendo el rename mismo** — no queda una carpeta `.tmp` abandonada. El pipeline se niega a sobrescribir un directorio final preexistente.
+- **Dry-run**: los errores de configuración (mismatch de `data_mode`, tasa inválida, manifest inválido, hash incorrecto, aliases inválidos) devuelven exit code **2** también durante `--dry-run`. Un error inesperado devuelve `1`.
+- **Manifest autoritativo** (extendido): todo `kind` de `manifest.files` — incluidos `report`, `search_page` y `error_log` — valida SHA-256, formato hex de 64 caracteres, path relativo y coincidencia con el archivo real. `ingestion_summary.json` está declarado como `kind="report"` y `manifest.summary_path` debe apuntar a él.
+- **Summary validado semánticamente**: `run_id`, `status` y timestamps deben coincidir con el manifest. `items_downloaded` debe igualar el conteo de envelopes `code=200` con `body` válido. `descriptions_downloaded` debe igualar la cantidad de entradas `kind="description"` declaradas.
+- **Unidades**: `parse_area` acepta sólo m²/m2/sqm/metros cuadrados y rechaza cualquier otro sufijo con `unsupported_area_unit`. `parse_count` recibe un allow-list por atributo (dormitorios, ambientes, baños, pisos, cocheras/garajes) y rechaza cualquier otra unidad con `unsupported_count_unit`. `bedrooms={"number": 3, "unit": "kg"}` deja el campo en null y agrega el issue.
+
+### Estado actual
+
+- Source gate real: `INCONCLUSIVE`.
+- Datos reales procesados: **no**.
+- Corridas reales de ETL: **no**.
+- Estado de la fase: **ETL_CONTRACT_READY** (código, tests y CI aprobados; sin resultados reales).
+- La Fase 3 (entrenamiento) queda bloqueada hasta que exista `ETL_PRODUCTION_VALIDATED`.
+
 ### Requisitos del source gate
 
 - El gate sólo puede devolver `APPROVED` si **ambas** categorías del alcance cerrado (`apartment` y `house`) se verificaron contra el árbol vivo del sitio. La verificación **recorre jerárquicamente** el árbol partiendo de `/sites/{site_id}/categories` y consultando `/categories/{id}` para expandir `children_categories`; las categorías finales pueden estar varios niveles debajo del root. Un contrato parcial, ambiguo (dos candidatos para el mismo tipo) o incompleto fuerza `INCONCLUSIVE` y no crea `source_gate_approval.json`. Esto se valida en el gate, en el writer del approval, en el loader del approval y en el query plan.

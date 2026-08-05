@@ -1,0 +1,51 @@
+{
+  "application_version": "0.1.0",
+  "authentication": {
+    "token_used": false
+  },
+  "config": {
+    "max_items": 5000,
+    "requests_per_second": 2,
+    "timeout_seconds": 20
+  },
+  "files": [
+    {
+      "kind": "report",
+      "path": "ingestion_summary.json",
+      "sha256": "8213d848ca4e3d1f0a600357e54c07573c61a0c2cd8873289577841f5cd3aa9c"
+    },
+    {
+      "kind": "item_batch",
+      "path": "items/batch_0001.json",
+      "sha256": "752fa7b967fee6c50651f0bfdfd120e560e668f358e13d9dd929aecb2c7bb831"
+    },
+    {
+      "kind": "item_batch",
+      "path": "items/batch_0002.json",
+      "sha256": "b164a739c6f5568b82631b5269b029944e3783c4604c9a4ff82a9b0e6f54908e"
+    },
+    {
+      "kind": "description",
+      "path": "descriptions/MLU_TEST_001.json",
+      "sha256": "66239ce40d334a931fb82ae1b0d92da880e764030636ad5275c996d09bc042b5"
+    },
+    {
+      "kind": "description",
+      "path": "descriptions/MLU_TEST_002.json",
+      "sha256": "e4276111ad386c9d0e2c943b7412deb0d421449f91caa5c0a2c3269dd8e5c182"
+    },
+    {
+      "kind": "description",
+      "path": "descriptions/MLU_TEST_003.json",
+      "sha256": "8cd936a4d212ee4462cb8ca899c09bd562c903d23a8b6289812fb6dc5bdec7bc"
+    }
+  ],
+  "finished_at": "2026-08-04T22:15:00Z",
+  "query_plan_hash": "fixture-hash",
+  "run_id": "fixture-run-001",
+  "site_id": "MLU",
+  "source": "mercadolibre",
+  "started_at": "2026-08-04T22:00:00Z",
+  "status": "completed",
+  "summary_path": "ingestion_summary.json"
+}

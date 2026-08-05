@@ -1,0 +1,10 @@
+{
+  "data_mode": "fixture",
+  "descriptions_downloaded": 3,
+  "finished_at": "2026-08-04T22:15:00Z",
+  "items_downloaded": 25,
+  "run_id": "fixture-run-001",
+  "started_at": "2026-08-04T22:00:00Z",
+  "status": "completed",
+  "unique_ids_found": 25
+}

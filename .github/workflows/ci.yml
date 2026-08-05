@@ -25,6 +25,7 @@ jobs:
           cache-dependency-path: |
             requirements-dev.txt
             requirements-ingest.txt
+            requirements-etl.txt
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
@@ -34,6 +35,9 @@ jobs:
 
       - name: Install ingestion dependencies
         run: pip install -r requirements-ingest.txt
+
+      - name: Install ETL dependencies
+        run: pip install -r requirements-etl.txt
 
       - name: Ruff lint
         run: ruff check .
