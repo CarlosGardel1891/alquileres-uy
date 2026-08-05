@@ -56,3 +56,7 @@ artifacts/*
 *.sqlite
 *.sqlite3
 tests/fixtures/etl_agg_tmp/
+tests/fixtures/ingest_integration_*/
+tests/fixtures/etl_broken_*/
+tests/fixtures/etl_wrong_hash_*/
+tests/fixtures/etl_bad_unit_*/

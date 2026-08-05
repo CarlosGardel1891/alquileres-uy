@@ -73,8 +73,16 @@ def test_parse_area_with_unit_m_squared():
     assert value == Decimal("65")
 
 
-def test_parse_number_struct():
+def test_parse_number_struct_rejects_unit_for_plain_parser():
+    # parse_number is the strict plain-number alias; any non-empty
+    # unit is unsupported_count_unit.
     value, err = parse_number({"number": 65, "unit": "m²"})
+    assert value is None
+    assert err == "unsupported_count_unit"
+
+
+def test_parse_number_struct_accepts_no_unit():
+    value, err = parse_number({"number": 65})
     assert err is None
     assert value == Decimal("65")
 
