@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -38,6 +39,31 @@ BOOLEAN_ATTRIBUTES: dict[str, str] = {
     "IS_NEW": "new_build",
 }
 
+# Per-attribute alias sets. A value_struct or string suffix whose
+# normalized unit is not in the attribute's allow-list is rejected as
+# ``unsupported_count_unit`` instead of being silently interpreted.
+COUNT_ATTRIBUTE_UNIT_ALIASES: dict[str, frozenset[str]] = {
+    "BEDROOMS": frozenset({"dormitorio", "dormitorios", "bedroom", "bedrooms"}),
+    "ROOMS": frozenset({"ambiente", "ambientes", "room", "rooms"}),
+    "FULL_BATHROOMS": frozenset({"bano", "banos", "bathroom", "bathrooms"}),
+    "BATHROOMS": frozenset({"bano", "banos", "bathroom", "bathrooms"}),
+    "FLOOR": frozenset({"piso", "pisos", "floor"}),
+    "PARKING_LOTS": frozenset(
+        {"cochera", "cocheras", "garaje", "garajes", "parking space", "parking spaces"}
+    ),
+}
+
+
+def normalize_unit(value: str | None) -> str:
+    """Return the canonical form of a unit string for comparison."""
+    if not isinstance(value, str):
+        return ""
+    decomposed = unicodedata.normalize("NFKD", value)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch) or ch == "²")
+    # Preserve the ² character (needed for m²) but collapse combining marks.
+    text = re.sub(r"\s+", " ", stripped.lower().strip())
+    return text
+
 
 def index_attributes(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Return an ``id → attribute`` dict indexed by ``attributes[].id``."""
@@ -66,12 +92,28 @@ def attribute_value(attribute: dict[str, Any] | None) -> Any:
 
 
 def parse_plain_number(raw: Any) -> tuple[Decimal | None, str | None]:
-    """Parse a count-like attribute (bedrooms, bathrooms, floor, ...).
+    """Parse a strict numeric value with no unit — for internal helpers.
 
-    Accepts ints/floats/Decimals, numeric strings with comma or dot
-    decimal separators, and ``value_struct = {"number": ...}`` payloads
-    (the unit, if any, is ignored — this parser is for counts, not
-    measurements). Rejects ranges (``"65-70"``) and free-form strings.
+    Accepts ints/floats/Decimals, numeric strings, and ``value_struct``
+    payloads whose ``unit`` is empty. Anything with a non-empty unit is
+    rejected as ``unsupported_count_unit``. Ranges and free-form text
+    stay ``invalid_number``/``invalid_range``.
+    """
+    return parse_count(raw, allowed_units=frozenset())
+
+
+def parse_count(
+    raw: Any,
+    *,
+    allowed_units: frozenset[str] = frozenset(),
+) -> tuple[Decimal | None, str | None]:
+    """Parse a count-like attribute.
+
+    ``allowed_units`` is the (normalized) alias set that this attribute
+    accepts as a unit. A ``value_struct.unit`` outside that set — or
+    any non-empty unit when ``allowed_units`` is empty — returns
+    ``(None, "unsupported_count_unit")``. Strings with a non-numeric
+    suffix keep the historical behavior (``invalid_number``).
     """
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return None, None
@@ -86,6 +128,10 @@ def parse_plain_number(raw: Any) -> tuple[Decimal | None, str | None]:
         number = raw.get("number")
         if number is None:
             return None, "invalid_number"
+        unit = raw.get("unit")
+        normalized = normalize_unit(unit) if unit is not None else ""
+        if normalized and normalized not in allowed_units:
+            return None, "unsupported_count_unit"
         try:
             return Decimal(str(number)), None
         except (InvalidOperation, TypeError, ValueError):
@@ -106,9 +152,14 @@ def parse_plain_number(raw: Any) -> tuple[Decimal | None, str | None]:
 
 
 def parse_area(raw: Any) -> tuple[Decimal | None, str | None]:
-    """Parse a surface attribute. Only m² / m2 / sqm / metros cuadrados accepted.
+    """Parse a surface attribute.
 
-    Ranges, ft², sqft and other units return ``(None, "unsupported_area_unit")``.
+    Only ``m²``/``m2``/``sqm``/``metros cuadrados`` are accepted as
+    unit suffixes. Any other suffix — recognized as such by the
+    presence of a non-numeric tail on the string — returns
+    ``(None, "unsupported_area_unit")``. Bare numbers without a
+    suffix are still accepted for compatibility with structured
+    fields whose semantics is already known to be square meters.
     """
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return None, None
@@ -136,21 +187,23 @@ def parse_area(raw: Any) -> tuple[Decimal | None, str | None]:
     for marker in _RANGE_MARKERS:
         if marker in text and not text.startswith("-"):
             return None, "invalid_range"
-    unit_found = False
-    for alias in sorted(_AREA_UNIT_ALIASES, key=len, reverse=True):
-        if text.endswith(alias):
-            text = text[: -len(alias)].strip()
-            unit_found = True
-            break
-    if not unit_found and any(
-        text.endswith(bad) for bad in ("ft2", "ft²", "sqft", "hectárea", "hectareas", "ha")
-    ):
-        return None, "unsupported_area_unit"
-    text = text.replace(",", ".")
-    if not _NUMBER_RE.match(text):
+
+    # Strip a trailing unit suffix if present; anything left that is
+    # not numeric must be an unsupported unit.
+    match = re.match(r"^(-?\d+(?:[.,]\d+)?)(?:\s*(.*))?$", text)
+    if not match:
+        return None, "invalid_number"
+    number_part = match.group(1)
+    suffix = (match.group(2) or "").strip()
+    if suffix:
+        canonical_suffix = normalize_unit(suffix)
+        if canonical_suffix not in _AREA_UNIT_ALIASES:
+            return None, "unsupported_area_unit"
+    number_part = number_part.replace(",", ".")
+    if not _NUMBER_RE.match(number_part):
         return None, "invalid_number"
     try:
-        return Decimal(text), None
+        return Decimal(number_part), None
     except InvalidOperation:
         return None, "invalid_number"
 
@@ -158,11 +211,13 @@ def parse_area(raw: Any) -> tuple[Decimal | None, str | None]:
 def _is_area_unit(value: Any) -> bool:
     if not isinstance(value, str):
         return False
-    key = value.strip().lower()
-    return key in _AREA_UNIT_ALIASES
+    return normalize_unit(value) in _AREA_UNIT_ALIASES
 
 
-# Backward-compatible alias so callers can still say parse_number(...).
+# Backward-compatible alias so callers that only need a plain number
+# can keep using the historical name. The alias intentionally maps to
+# the strict variant — parsers used for attribute values must go
+# through :func:`parse_count` with the right ``allowed_units``.
 parse_number = parse_plain_number
 
 
@@ -181,12 +236,7 @@ def extract_scope(
     body: dict[str, Any],
     verified_category_ids: dict[str, str],
 ) -> tuple[str | None, str | None, list[str]]:
-    """Return ``(operation, property_type, reasons)`` for a single item.
-
-    ``operation`` is either ``"monthly_rent"`` or ``None``. ``property_type``
-    is one of ``"apartment"``, ``"house"`` or ``None``. ``reasons`` is a
-    list of rejection reason codes (empty when the item is in scope).
-    """
+    """Return ``(operation, property_type, reasons)`` for a single item."""
     from .source_scope import classify_operation, classify_property_type
 
     reasons: list[str] = []
@@ -211,7 +261,7 @@ def extract_text(body: dict[str, Any], keys: tuple[str, ...]) -> str | None:
 def extract_first_matching_attribute(
     attributes: dict[str, dict[str, Any]],
     ids: tuple[str, ...],
-    parser: Callable[[Any], tuple[Any | None, str | None]] = parse_number,
+    parser: Callable[[Any], tuple[Any | None, str | None]] = parse_plain_number,
 ) -> tuple[Any | None, str | None]:
     for attribute_id in ids:
         attribute = attributes.get(attribute_id)

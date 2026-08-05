@@ -30,12 +30,13 @@ from .extractors import (
     AREA_ATTRIBUTE_IDS,
     ATTRIBUTE_MAP,
     BOOLEAN_ATTRIBUTES,
+    COUNT_ATTRIBUTE_UNIT_ALIASES,
     attribute_value,
     index_attributes,
     known_attribute_ids,
     parse_area,
     parse_bool,
-    parse_plain_number,
+    parse_count,
 )
 from .lineage import build_input_hashes, build_lineage, file_sha256
 from .loaders import iter_raw_items
@@ -214,6 +215,8 @@ class EtlPipeline:
 
         finished_at = datetime.now(UTC)
         workdir_final = self._final_workdir_path(started_at, etl_run_id)
+        if workdir_final.exists():
+            raise FileExistsError(f"ETL output directory already exists: {workdir_final}")
         workdir_tmp = workdir_final.with_suffix(workdir_final.suffix + ".tmp")
         if workdir_tmp.exists():
             shutil.rmtree(workdir_tmp)
@@ -307,13 +310,14 @@ class EtlPipeline:
                 row_counts=row_counts,
             )
             outputs["lineage"] = write_json(lineage, workdir_tmp / "lineage.json")
+            _publish_workdir_atomically(workdir_tmp, workdir_final)
         except Exception:
+            # Covers write failures, schema errors, and — critically —
+            # any failure of the rename itself. `ignore_errors=True`
+            # keeps the original exception visible while still
+            # scrubbing the .tmp dir.
             shutil.rmtree(workdir_tmp, ignore_errors=True)
             raise
-
-        # Atomic publication.
-        workdir_final.parent.mkdir(parents=True, exist_ok=True)
-        workdir_tmp.rename(workdir_final)
 
         return EtlResult(
             etl_run_id=etl_run_id,
@@ -395,8 +399,14 @@ class EtlPipeline:
         for attribute_id, column in ATTRIBUTE_MAP.items():
             if attribute_id == "COMMON_EXPENSES":
                 continue
-            parser = parse_area if attribute_id in AREA_ATTRIBUTE_IDS else parse_plain_number
-            value, error = parser(attribute_value(attributes.get(attribute_id)))
+            raw_value = attribute_value(attributes.get(attribute_id))
+            if attribute_id in AREA_ATTRIBUTE_IDS:
+                value, error = parse_area(raw_value)
+            else:
+                value, error = parse_count(
+                    raw_value,
+                    allowed_units=COUNT_ATTRIBUTE_UNIT_ALIASES.get(attribute_id, frozenset()),
+                )
             if error:
                 row.add_issue(column, error)
             row.set(column, value)
@@ -842,6 +852,14 @@ def _bucketed_price(value: Any) -> int | None:
         return int(Decimal(str(value)) // Decimal("50"))
     except Exception:
         return None
+
+
+def _publish_workdir_atomically(workdir_tmp: Path, workdir_final: Path) -> None:
+    """Move ``workdir_tmp`` to ``workdir_final`` — refuses to overwrite."""
+    if workdir_final.exists():
+        raise FileExistsError(f"ETL output directory already exists: {workdir_final}")
+    workdir_final.parent.mkdir(parents=True, exist_ok=True)
+    workdir_tmp.rename(workdir_final)
 
 
 # Backwards-compatible import point for other modules or tests that need
