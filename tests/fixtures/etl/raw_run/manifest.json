@@ -10,6 +10,11 @@
   },
   "files": [
     {
+      "kind": "report",
+      "path": "ingestion_summary.json",
+      "sha256": "8213d848ca4e3d1f0a600357e54c07573c61a0c2cd8873289577841f5cd3aa9c"
+    },
+    {
       "kind": "item_batch",
       "path": "items/batch_0001.json",
       "sha256": "752fa7b967fee6c50651f0bfdfd120e560e668f358e13d9dd929aecb2c7bb831"

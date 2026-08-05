@@ -193,6 +193,20 @@ def main() -> None:
         }
         _write_json_lf(descriptions_dir / f"MLU_TEST_{i:03d}.json", body)
 
+    # Summary is written BEFORE the manifest so its hash can be
+    # recorded alongside the batches/descriptions.
+    summary = {
+        "run_id": "fixture-run-001",
+        "status": "completed",
+        "started_at": "2026-08-04T22:00:00Z",
+        "finished_at": "2026-08-04T22:15:00Z",
+        "data_mode": "fixture",
+        "unique_ids_found": len(items),
+        "items_downloaded": len(items),
+        "descriptions_downloaded": 3,
+    }
+    _write_json_lf(root / "ingestion_summary.json", summary)
+
     file_entries = _describe_files(root)
     manifest = {
         "run_id": "fixture-run-001",
@@ -210,16 +224,6 @@ def main() -> None:
     }
     _write_json_lf(root / "manifest.json", manifest)
 
-    summary = {
-        "run_id": "fixture-run-001",
-        "status": "completed",
-        "data_mode": "fixture",
-        "unique_ids_found": len(items),
-        "items_downloaded": len(items),
-        "descriptions_downloaded": 3,
-    }
-    _write_json_lf(root / "ingestion_summary.json", summary)
-
     print(f"generated {len(items)} items across 2 batches")
 
 
@@ -232,6 +236,16 @@ def _write_json_lf(path: Path, payload) -> None:
 def _describe_files(root: Path) -> list[dict[str, str]]:
     """Build manifest.files entries with SHA-256 for every JSON under the run."""
     entries: list[dict[str, str]] = []
+    # Summary appears as kind="report", matching the Fase 1 writer.
+    summary_path = root / "ingestion_summary.json"
+    if summary_path.is_file():
+        entries.append(
+            {
+                "path": "ingestion_summary.json",
+                "kind": "report",
+                "sha256": hashlib.sha256(summary_path.read_bytes()).hexdigest(),
+            }
+        )
     for subdir, kind in (("items", "item_batch"), ("descriptions", "description")):
         for candidate in sorted((root / subdir).glob("*.json")):
             entries.append(
