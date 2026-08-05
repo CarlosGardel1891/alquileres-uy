@@ -11,12 +11,14 @@ data into the pipeline.
 
 ``ingestion_summary.json`` is not just any file. The manifest must
 declare it with ``kind = "report"`` and its ``manifest.summary_path``
-must point to that declaration. The summary itself is cross-checked
-against the manifest inventory: ``items_downloaded`` must equal the
-count of ``code == 200`` envelopes across every declared item batch,
-and ``descriptions_downloaded`` must equal the count of declared
-``description`` entries. Timestamps and status must agree with the
-manifest.
+must exactly match the declared ``report`` entry's logical path — not
+just its basename. The summary itself is cross-checked against the
+manifest inventory: ``items_downloaded`` must equal the count of
+``code == 200`` envelopes across every declared item batch, and
+``descriptions_downloaded`` must equal the count of declared
+``description`` entries. The summary's ``started_at`` /
+``finished_at`` are required (with an explicit timezone) and must
+resolve to the same UTC instant as the manifest timestamps.
 
 Timestamps in the manifest (``started_at``/``finished_at``) are
 required and must be ISO-8601 with an explicit timezone. The ETL
@@ -217,6 +219,38 @@ def _validate_sha256(value: object, *, path: str) -> str:
     return stripped.lower()
 
 
+def _normalize_manifest_relative_path(
+    raw_path: str,
+    *,
+    run_directory: Path,
+    label: str,
+) -> str:
+    """Return the POSIX logical path of ``raw_path`` inside ``run_directory``.
+
+    Applies the same rules across ``manifest.files[*].path`` and
+    ``manifest.summary_path``: relative, no ``..``, no absolute (POSIX
+    or Windows-drive), no ``./`` prefix, must resolve inside the run.
+    Backslashes are normalized to ``/`` on input; the returned value is
+    always POSIX-shaped.
+    """
+    cleaned = raw_path.replace("\\", "/").strip()
+    if not cleaned:
+        raise RawRunValidationError(f"{label} has empty or missing path")
+    if cleaned.startswith("/"):
+        raise RawRunValidationError(f"{label} must be a relative POSIX path, got {raw_path!r}")
+    if len(cleaned) >= 2 and cleaned[1] == ":":
+        raise RawRunValidationError(f"{label} must be a relative POSIX path, got {raw_path!r}")
+    if cleaned.startswith("./") or cleaned == ".":
+        raise RawRunValidationError(f"{label} must not start with './', got {raw_path!r}")
+    candidate = Path(cleaned)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise RawRunValidationError(f"{label} is not allowed to escape the run: {raw_path!r}")
+    resolved = (run_directory / candidate).resolve()
+    if not resolved.is_relative_to(run_directory):
+        raise RawRunValidationError(f"{label} resolves outside the run: {raw_path!r}")
+    return str(resolved.relative_to(run_directory)).replace("\\", "/")
+
+
 def _validate_manifest_files(
     entries: list[Any],
     run_directory: Path,
@@ -235,17 +269,10 @@ def _validate_manifest_files(
         if not isinstance(kind, str) or kind not in KNOWN_FILE_KINDS:
             raise RawRunValidationError(f"manifest.files unknown kind: {kind!r}")
 
-        candidate = Path(raw_path)
-        if candidate.is_absolute() or ".." in candidate.parts:
-            raise RawRunValidationError(
-                f"manifest.files path is not allowed to escape the run: {raw_path!r}"
-            )
-        resolved = (run_directory / candidate).resolve()
-        if not resolved.is_relative_to(run_directory):
-            raise RawRunValidationError(
-                f"manifest.files path resolves outside the run: {raw_path!r}"
-            )
-        logical = str(resolved.relative_to(run_directory)).replace("\\", "/")
+        logical = _normalize_manifest_relative_path(
+            raw_path, run_directory=run_directory, label="manifest.files entry"
+        )
+        resolved = (run_directory / logical).resolve()
         if logical in seen_paths:
             raise RawRunValidationError(f"manifest.files declares {logical!r} twice")
         seen_paths.add(logical)
@@ -312,28 +339,31 @@ def _validate_summary_declaration(
     summary_path_declared = manifest.get("summary_path")
     if not isinstance(summary_path_declared, str) or not summary_path_declared.strip():
         raise RawRunValidationError("manifest.summary_path is required")
-    if ".." in Path(summary_path_declared).parts or Path(summary_path_declared).is_absolute():
-        raise RawRunValidationError(
-            f"manifest.summary_path is not a safe relative path: {summary_path_declared!r}"
-        )
-    if Path(summary_path_declared).name != "ingestion_summary.json":
-        raise RawRunValidationError(
-            "manifest.summary_path must resolve to ingestion_summary.json, "
-            f"got {summary_path_declared!r}"
-        )
+
+    run_directory = summary_path.parent
+    normalized = _normalize_manifest_relative_path(
+        summary_path_declared, run_directory=run_directory, label="manifest.summary_path"
+    )
+
     reports = [entry for entry in declared if entry.kind == "report"]
-    matching = [entry for entry in reports if entry.resolved_path.name == "ingestion_summary.json"]
-    if not matching:
+    exact_matches = [entry for entry in reports if entry.path == normalized]
+    if not exact_matches:
         raise RawRunValidationError(
-            "manifest.files must declare ingestion_summary.json with kind='report'"
+            f"manifest.summary_path {normalized!r} does not match the declared "
+            f"report path in manifest.files"
         )
-    if len(matching) > 1:
+    if len(exact_matches) > 1:
+        # Structural duplicates are already caught by _validate_manifest_files,
+        # but keep the fallback so the error names the offending field.
         raise RawRunValidationError(
-            "manifest.files declares ingestion_summary.json more than once as report"
+            f"manifest.summary_path {normalized!r} matches more than one report "
+            f"entry in manifest.files"
         )
-    if matching[0].resolved_path != summary_path.resolve():
+    entry = exact_matches[0]
+    if entry.resolved_path != summary_path.resolve():
         raise RawRunValidationError(
-            "manifest.summary_path does not point to the declared report entry"
+            f"manifest.summary_path {normalized!r} does not point to the loaded "
+            f"ingestion_summary.json"
         )
 
 
@@ -365,8 +395,8 @@ def _validate_summary_semantics(
             f"{manifest.get('status')!r}"
         )
 
-    _cross_check_iso(summary, "started_at", started_at)
-    _cross_check_iso(summary, "finished_at", finished_at)
+    _require_matching_summary_timestamp(summary, "started_at", started_at)
+    _require_matching_summary_timestamp(summary, "finished_at", finished_at)
 
     items_downloaded = summary.get("items_downloaded")
     if not isinstance(items_downloaded, int) or items_downloaded < 0:
@@ -393,12 +423,21 @@ def _validate_summary_semantics(
         )
 
 
-def _cross_check_iso(summary: dict[str, Any], key: str, expected: datetime) -> None:
-    if key not in summary:
-        return
+def _require_matching_summary_timestamp(
+    summary: dict[str, Any], key: str, expected: datetime
+) -> None:
+    """Require ``summary[key]`` to be an ISO-8601 tz-aware timestamp equal to ``expected``.
+
+    Unlike a "cross-check", the field is not optional: a missing,
+    null, or empty value is rejected. The comparison is done after
+    normalizing both sides to UTC, so an equivalent offset (e.g.
+    ``-03:00`` vs ``Z``) is accepted as long as the instant matches.
+    """
+    if key not in summary or summary.get(key) is None:
+        raise RawRunValidationError(f"summary.{key} is required")
     raw = summary.get(key)
     if not isinstance(raw, str) or not raw.strip():
-        raise RawRunValidationError(f"summary.{key} must be a string when present")
+        raise RawRunValidationError(f"summary.{key} is required")
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError as exc:
@@ -407,7 +446,7 @@ def _cross_check_iso(summary: dict[str, Any], key: str, expected: datetime) -> N
         raise RawRunValidationError(f"summary.{key} must include a timezone offset, got {raw!r}")
     if parsed.astimezone(UTC) != expected:
         raise RawRunValidationError(
-            f"summary.{key}={raw!r} does not match manifest.{key} " f"({expected.isoformat()})"
+            f"summary.{key} {raw!r} does not match manifest.{key} " f"({expected.isoformat()})"
         )
 
 
