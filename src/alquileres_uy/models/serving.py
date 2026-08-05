@@ -176,10 +176,10 @@ def build_serving_bundle(
     write_json(directory / "feature_schema.json", build_feature_schema())
     write_json(directory / "residual_interval.json", residual_interval.as_json())
 
+    # Only hash the four required payloads. Never enumerate the directory —
+    # that could accidentally cover unexpected files and mask a corruption.
     checksums = {
-        p.name: sha256_file(p)
-        for p in directory.iterdir()
-        if p.is_file() and p.name != "checksums.json"
+        name: sha256_file(directory / name) for name in sorted(REQUIRED_BUNDLE_PAYLOAD_FILES)
     }
     write_json(directory / "checksums.json", checksums)
 
@@ -190,6 +190,9 @@ def build_serving_bundle(
             f"serving bundle is {total_size} bytes, over the {ARTIFACT_SIZE_LIMIT_BYTES} limit; "
             f"largest file: {biggest.name}. Publish binary artifacts via GitHub Releases instead."
         )
+    # Verify the bundle satisfies the loader's structural contract without
+    # deserializing the model — catches builder regressions immediately.
+    validate_serving_bundle_integrity(directory)
     return directory
 
 
@@ -200,13 +203,15 @@ def _save_serving_model(model_object: object, path: Path) -> None:
 
 
 _SHA256_HEX_RE = __import__("re").compile(r"^[0-9a-fA-F]{64}$")
-_REQUIRED_BUNDLE_FILES: tuple[str, ...] = (
-    "model.joblib",
-    "metadata.json",
-    "feature_schema.json",
-    "residual_interval.json",
-    "checksums.json",
+REQUIRED_BUNDLE_PAYLOAD_FILES: frozenset[str] = frozenset(
+    {
+        "model.joblib",
+        "metadata.json",
+        "feature_schema.json",
+        "residual_interval.json",
+    }
 )
+REQUIRED_BUNDLE_FILES: frozenset[str] = REQUIRED_BUNDLE_PAYLOAD_FILES | {"checksums.json"}
 _REQUIRED_VERSIONS: tuple[str, ...] = ("python", "numpy", "pandas", "scikit_learn", "joblib")
 
 
@@ -215,26 +220,30 @@ def load_serving_bundle(directory: Path, *, allow_fixture: bool = False) -> dict
 
     Order:
 
-    1. resolve + confirm every required file exists;
-    2. validate ``checksums.json`` — safe filenames, hex hashes, real hashes;
+    1. resolve + confirm the directory contains exactly the five expected
+       files and nothing else (no subdirs, no symlinks, no extras);
+    2. validate ``checksums.json`` — keys must equal
+       :data:`REQUIRED_BUNDLE_PAYLOAD_FILES`, values must be hex sha256,
+       hash of every payload must match;
     3. only then read ``metadata.json``;
-    4. verify bundle_version / model_type / data_mode / deployable /
-       model_artifact_sha256;
+    4. verify ``bundle_version``, ``model_type``, ``data_mode``,
+       ``deployable`` (boolean coherent with ``data_mode``) and
+       ``model_artifact_sha256``;
     5. reject fixture bundles unless ``allow_fixture=True``;
     6. run :func:`validate_runtime_compatibility`;
-    7. finally: ``joblib.load(model.joblib)``.
+    7. finally invoke ``joblib.load(model.joblib)``.
+
+    Any failure raises :class:`ServingBundleError` before deserialization.
     """
     directory = Path(directory).resolve()
     if not directory.is_dir():
         raise ServingBundleError(f"serving bundle directory missing: {directory}")
 
-    for name in _REQUIRED_BUNDLE_FILES:
-        if not (directory / name).is_file():
-            raise ServingBundleError(f"serving bundle missing required file: {name}")
-
-    _validate_checksums(directory)
+    validate_serving_bundle_integrity(directory)
 
     metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict):
+        raise ServingBundleError("metadata.json root must be a JSON object")
     if metadata.get("bundle_version") != BUNDLE_VERSION:
         raise ServingBundleError(
             f"bundle_version mismatch: expected {BUNDLE_VERSION!r}, "
@@ -243,8 +252,23 @@ def load_serving_bundle(directory: Path, *, allow_fixture: bool = False) -> dict
     model_type = metadata.get("model_type")
     if model_type not in SERVING_ELIGIBLE_MODEL_NAMES:
         raise ServingBundleError(f"metadata.model_type is not eligible: {model_type!r}")
-    if metadata.get("data_mode") not in {"fixture", "real"}:
-        raise ServingBundleError(f"metadata.data_mode is invalid: {metadata.get('data_mode')!r}")
+
+    data_mode = metadata.get("data_mode")
+    if not isinstance(data_mode, str) or data_mode not in {"fixture", "real"}:
+        raise ServingBundleError(f"metadata.data_mode is invalid: {data_mode!r}")
+
+    deployable = metadata.get("deployable")
+    # ``bool`` is a subclass of ``int``; use ``type(...) is bool`` to
+    # reject ``0``, ``1``, ``"true"``, null and other look-alikes.
+    if type(deployable) is not bool:
+        raise ServingBundleError("metadata.deployable must be a boolean")
+
+    expected_deployable = data_mode == "real"
+    if deployable is not expected_deployable:
+        raise ServingBundleError(
+            f"metadata deployability is inconsistent: data_mode={data_mode!r} "
+            f"requires deployable={'true' if expected_deployable else 'false'}"
+        )
 
     declared_hash = metadata.get("model_artifact_sha256")
     actual_hash = sha256_file(directory / "model.joblib")
@@ -253,7 +277,7 @@ def load_serving_bundle(directory: Path, *, allow_fixture: bool = False) -> dict
             "metadata.model_artifact_sha256 does not match the model.joblib on disk"
         )
 
-    if not metadata.get("deployable", False) and not allow_fixture:
+    if not deployable and not allow_fixture:
         raise ServingBundleError(
             "refusing to load a fixture serving bundle; pass allow_fixture=True in tests only"
         )
@@ -262,6 +286,42 @@ def load_serving_bundle(directory: Path, *, allow_fixture: bool = False) -> dict
 
     model = joblib.load(directory / "model.joblib")
     return {"metadata": metadata, "model": model}
+
+
+def validate_serving_bundle_integrity(directory: Path) -> None:
+    """Check the bundle's structural + integrity contract without deserializing.
+
+    Public helper used by :func:`build_serving_bundle` to verify a freshly
+    written bundle without invoking ``joblib.load``.
+    """
+    directory = Path(directory).resolve()
+    if not directory.is_dir():
+        raise ServingBundleError(f"serving bundle directory missing: {directory}")
+    _validate_bundle_file_set(directory)
+    _validate_checksums(directory)
+
+
+def _validate_bundle_file_set(directory: Path) -> None:
+    """Enforce the exact top-level file set (no subdirs / symlinks / extras)."""
+    actual: set[str] = set()
+    for entry in directory.iterdir():
+        # Reject subdirectories, symlinks and non-regular files up front.
+        if entry.is_symlink():
+            raise ServingBundleError(f"serving bundle contains a symlink: {entry.name!r}")
+        if entry.is_dir():
+            raise ServingBundleError(
+                f"serving bundle contains an unexpected directory: {entry.name!r}"
+            )
+        if not entry.is_file():
+            raise ServingBundleError(f"serving bundle entry {entry.name!r} is not a regular file")
+        actual.add(entry.name)
+
+    missing = sorted(REQUIRED_BUNDLE_FILES - actual)
+    if missing:
+        raise ServingBundleError(f"serving bundle is missing required files: {missing}")
+    extra = sorted(actual - REQUIRED_BUNDLE_FILES)
+    if extra:
+        raise ServingBundleError(f"serving bundle contains undeclared files: {extra}")
 
 
 def validate_runtime_compatibility(metadata: dict[str, Any]) -> None:
@@ -321,8 +381,8 @@ def _validate_checksums(directory: Path) -> None:
     declared = json.loads(checksum_path.read_text(encoding="utf-8"))
     if not isinstance(declared, dict) or not declared:
         raise ServingBundleError("checksums.json must be a non-empty object")
-    # ``checksums.json`` must never list itself and every entry must map
-    # a safe relative filename to a valid sha256 hex digest.
+
+    # Each key must be a safe simple filename with a valid sha256 hex.
     for name, expected in declared.items():
         if not isinstance(name, str) or not name:
             raise ServingBundleError(f"checksums.json entry name is not a string: {name!r}")
@@ -330,10 +390,24 @@ def _validate_checksums(directory: Path) -> None:
             raise ServingBundleError("checksums.json must not declare itself")
         if "/" in name or "\\" in name or ".." in Path(name).parts or Path(name).is_absolute():
             raise ServingBundleError(f"checksums.json entry {name!r} is not a safe filename")
+        if len(name) >= 2 and name[1] == ":":
+            raise ServingBundleError(
+                f"checksums.json entry {name!r} looks like a Windows drive path"
+            )
         if not isinstance(expected, str) or not _SHA256_HEX_RE.match(expected):
             raise ServingBundleError(
                 f"checksums.json entry {name!r} does not carry a sha256 hex digest"
             )
+
+    declared_keys = set(declared.keys())
+    missing_entries = sorted(REQUIRED_BUNDLE_PAYLOAD_FILES - declared_keys)
+    if missing_entries:
+        raise ServingBundleError(f"checksums.json is missing required entries: {missing_entries}")
+    extra_entries = sorted(declared_keys - REQUIRED_BUNDLE_PAYLOAD_FILES)
+    if extra_entries:
+        raise ServingBundleError(f"checksums.json contains unexpected entries: {extra_entries}")
+
+    for name, expected in declared.items():
         target = directory / name
         if not target.is_file():
             raise ServingBundleError(f"checksums.json references missing file {name!r}")
@@ -343,6 +417,8 @@ def _validate_checksums(directory: Path) -> None:
 
 
 __all__ = [
+    "REQUIRED_BUNDLE_FILES",
+    "REQUIRED_BUNDLE_PAYLOAD_FILES",
     "ResidualInterval",
     "ServingBundleError",
     "build_feature_schema",
@@ -350,4 +426,5 @@ __all__ = [
     "compute_residual_interval",
     "load_serving_bundle",
     "validate_runtime_compatibility",
+    "validate_serving_bundle_integrity",
 ]
