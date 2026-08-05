@@ -1,13 +1,20 @@
-"""Shared feature preprocessing for the classical models.
+"""Shared feature preprocessing for every candidate model.
 
-The classical models (Ridge, LightGBM) reuse a small sklearn
-``ColumnTransformer`` that must be fit **only** on the training
-partition. The bathroom imputer, the numeric scaler and the
-one-hot encoder are all leak-free by construction because their
-``fit`` is called with the train frame alone.
+Two entry points:
 
-The PyTorch model builds its own vocabularies via
-:func:`build_torch_vocabularies` — same rule applies (train only).
+* :func:`build_preprocessor` returns the classical ColumnTransformer
+  (median imputation + StandardScaler on the numeric branch, one-hot
+  with ``handle_unknown="ignore"`` on the categorical branch) that
+  Ridge and LightGBM share. Every fit must run on the training
+  partition only during tuning, and on ``train + validation`` only
+  during the final refit — the transformer itself does not know that
+  distinction, so the caller is responsible.
+* :func:`build_torch_vocabularies` builds the PyTorch-specific
+  vocabularies. Index 0 is reserved for unknown/missing tokens on
+  both categorical fields. Bathrooms is imputed with the fit-frame
+  **median** (train during tuning, ``train + validation`` during the
+  final refit); numeric mean / std are computed on the already-imputed
+  values so inference and training see the same distribution.
 """
 
 from __future__ import annotations
@@ -28,10 +35,20 @@ from .contracts import check_training_leakage
 
 @dataclass(frozen=True)
 class TorchVocabularies:
+    """Vocabularies + numeric statistics learned from a fit frame.
+
+    ``numeric_impute_values`` holds the value used to fill ``bathrooms``
+    when it is missing. It is always the fit-frame **median** (never the
+    mean); ``numeric_mean``/``numeric_std`` are computed *after*
+    imputation so the standardisation matches what the module sees at
+    inference time.
+    """
+
     neighborhood: dict[str, int]
     property_type: dict[str, int]
     numeric_mean: dict[str, float]
     numeric_std: dict[str, float]
+    numeric_impute_values: dict[str, float]
 
     def as_json(self) -> dict:
         return {
@@ -39,14 +56,16 @@ class TorchVocabularies:
             "property_type": self.property_type,
             "numeric_mean": self.numeric_mean,
             "numeric_std": self.numeric_std,
+            "numeric_impute_values": self.numeric_impute_values,
         }
 
 
 def build_preprocessor() -> ColumnTransformer:
     """Return the shared ColumnTransformer for the classical models.
 
-    Numeric branch imputes bathrooms via train median and standardizes.
-    Categorical branch one-hot encodes with ``handle_unknown="ignore"``.
+    Numeric branch imputes bathrooms via the fit-frame median and
+    standardizes. Categorical branch one-hot encodes with
+    ``handle_unknown="ignore"``.
     """
     check_training_leakage(FEATURE_COLUMNS)
     numeric = Pipeline(
@@ -67,15 +86,19 @@ def build_preprocessor() -> ColumnTransformer:
 def feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
     """Return the frame limited to the declared feature columns.
 
-    Ensures the caller cannot accidentally hand the estimator the
-    target column or leaky derivatives.
+    If ``bathrooms`` is absent, add it as an all-NaN column so downstream
+    imputers can operate on it without surprising the caller. The input
+    frame is never mutated.
     """
-    missing = [c for c in FEATURE_COLUMNS if c not in frame.columns]
+    working = frame
+    if "bathrooms" not in working.columns:
+        working = frame.copy()
+        working["bathrooms"] = pd.array([pd.NA] * len(frame), dtype="Float64")
+    missing = [c for c in FEATURE_COLUMNS if c not in working.columns]
     if missing:
         raise ValueError(f"input frame is missing feature columns: {missing}")
     check_training_leakage(FEATURE_COLUMNS)
-    subset = frame.loc[:, list(FEATURE_COLUMNS)].copy()
-    # Ensure numeric dtypes and drop any nullable pandas types the model libs dislike.
+    subset = working.loc[:, list(FEATURE_COLUMNS)].copy()
     for column in NUMERIC_FEATURES:
         subset[column] = pd.to_numeric(subset[column], errors="coerce").astype(float)
     for column in CATEGORICAL_FEATURES:
@@ -84,32 +107,39 @@ def feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def resolve_feature_names(preprocessor: ColumnTransformer) -> list[str]:
-    """Return the ordered feature names produced by ``build_preprocessor``.
-
-    Sklearn versions differ in exposure; use ``get_feature_names_out``
-    when available.
-    """
+    """Return the ordered feature names produced by ``build_preprocessor``."""
     return list(preprocessor.get_feature_names_out())
 
 
-def build_torch_vocabularies(train_frame: pd.DataFrame) -> TorchVocabularies:
-    """Build categorical vocabularies + numeric normalization stats from train.
+def build_torch_vocabularies(fit_frame: pd.DataFrame) -> TorchVocabularies:
+    """Build categorical vocabularies + numeric normalization stats.
 
-    Index 0 is reserved for unknown/missing categories on both fields.
+    ``fit_frame`` is train-only during tuning and ``train + validation``
+    during the final refit — the caller decides.
     """
     check_training_leakage(FEATURE_COLUMNS)
-    neighborhood_vocab = _make_vocabulary(train_frame["neighborhood_normalized"])
-    property_vocab = _make_vocabulary(train_frame["property_type"])
+    neighborhood_vocab = _make_vocabulary(fit_frame["neighborhood_normalized"])
+    property_vocab = _make_vocabulary(fit_frame["property_type"])
+
+    working = fit_frame
+    if "bathrooms" not in working.columns:
+        working = fit_frame.copy()
+        working["bathrooms"] = pd.array([pd.NA] * len(fit_frame), dtype="Float64")
 
     numeric_mean: dict[str, float] = {}
     numeric_std: dict[str, float] = {}
+    numeric_impute: dict[str, float] = {}
     for column in NUMERIC_FEATURES:
-        values = pd.to_numeric(train_frame[column], errors="coerce").astype(float)
-        if column == "bathrooms":
-            median = float(values.dropna().median() if not values.dropna().empty else 1.0)
+        values = pd.to_numeric(working[column], errors="coerce").astype(float)
+        if values.isnull().any():
+            non_null = values.dropna()
+            if non_null.empty:
+                raise ValueError(
+                    f"cannot compute median for '{column}': no non-null training values"
+                )
+            median = float(non_null.median())
             values = values.fillna(median)
-        elif values.isnull().any():
-            raise ValueError(f"unexpected null in required feature '{column}'")
+            numeric_impute[column] = median
         mean = float(values.mean())
         std = float(values.std(ddof=0))
         if std == 0.0:
@@ -122,6 +152,7 @@ def build_torch_vocabularies(train_frame: pd.DataFrame) -> TorchVocabularies:
         property_type=property_vocab,
         numeric_mean=numeric_mean,
         numeric_std=numeric_std,
+        numeric_impute_values=numeric_impute,
     )
 
 
@@ -131,22 +162,29 @@ def encode_torch_frame(
     """Encode ``frame`` with the given vocabularies.
 
     Returns three arrays: neighborhood indices, property_type indices,
-    and the standardized numeric matrix (columns in ``NUMERIC_FEATURES`` order).
+    and the standardized numeric matrix (columns in
+    ``NUMERIC_FEATURES`` order).
     """
-    neighborhood_idx = _lookup_indices(frame["neighborhood_normalized"], vocabularies.neighborhood)
-    property_idx = _lookup_indices(frame["property_type"], vocabularies.property_type)
+    working = frame
+    if "bathrooms" not in working.columns:
+        working = frame.copy()
+        working["bathrooms"] = pd.array([pd.NA] * len(frame), dtype="Float64")
+    neighborhood_idx = _lookup_indices(
+        working["neighborhood_normalized"], vocabularies.neighborhood
+    )
+    property_idx = _lookup_indices(working["property_type"], vocabularies.property_type)
 
     numeric_cols = []
     for column in NUMERIC_FEATURES:
-        values = pd.to_numeric(frame[column], errors="coerce").astype(float)
-        if column == "bathrooms":
-            # Fall back to the train mean captured in the vocabulary.
-            fill_value = vocabularies.numeric_mean.get("bathrooms")
+        values = pd.to_numeric(working[column], errors="coerce").astype(float)
+        if values.isnull().any():
+            fill_value = vocabularies.numeric_impute_values.get(column)
             if fill_value is None:
-                fill_value = 1.0
+                raise ValueError(
+                    f"unexpected null in feature '{column}' during encoding — "
+                    "the fit frame did not record an impute value"
+                )
             values = values.fillna(fill_value)
-        elif values.isnull().any():
-            raise ValueError(f"unexpected null in feature '{column}' during encoding")
         arr = values.to_numpy()
         std = vocabularies.numeric_std[column]
         mean = vocabularies.numeric_mean[column]
