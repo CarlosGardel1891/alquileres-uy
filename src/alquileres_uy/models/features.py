@@ -31,17 +31,20 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from .config import CATEGORICAL_FEATURES, FEATURE_COLUMNS, NUMERIC_FEATURES
 from .contracts import check_training_leakage
+from .imputation import CONSTANT_FALLBACK, resolve_numeric_imputation_values
 
 
 @dataclass(frozen=True)
 class TorchVocabularies:
     """Vocabularies + numeric statistics learned from a fit frame.
 
-    ``numeric_impute_values`` holds the value used to fill ``bathrooms``
-    when it is missing. It is always the fit-frame **median** (never the
-    mean); ``numeric_mean``/``numeric_std`` are computed *after*
-    imputation so the standardisation matches what the module sees at
-    inference time.
+    ``numeric_impute_values`` holds the value used to fill a missing
+    observation for each numeric feature: the fit-frame **median** when
+    the column had any observations, and ``0.0`` when it did not (all
+    values null, or the column was absent and injected as NaN by the
+    input contract). ``imputation_sources`` records which case applied.
+    ``numeric_mean`` / ``numeric_std`` are computed *after* imputation so
+    the standardisation matches what the module sees at inference time.
     """
 
     neighborhood: dict[str, int]
@@ -49,6 +52,7 @@ class TorchVocabularies:
     numeric_mean: dict[str, float]
     numeric_std: dict[str, float]
     numeric_impute_values: dict[str, float]
+    imputation_sources: dict[str, str]
 
     def as_json(self) -> dict:
         return {
@@ -57,20 +61,23 @@ class TorchVocabularies:
             "numeric_mean": self.numeric_mean,
             "numeric_std": self.numeric_std,
             "numeric_impute_values": self.numeric_impute_values,
+            "imputation_sources": self.imputation_sources,
         }
 
 
 def build_preprocessor() -> ColumnTransformer:
     """Return the shared ColumnTransformer for the classical models.
 
-    Numeric branch imputes bathrooms via the fit-frame median and
-    standardizes. Categorical branch one-hot encodes with
-    ``handle_unknown="ignore"``.
+    Numeric branch imputes missing values with the fit-frame median and
+    standardizes. ``keep_empty_features=True`` preserves ``bathrooms``
+    even when the fit frame has no observations for it (sklearn 1.6
+    falls back to 0.0 for such columns, matching :mod:`imputation`).
+    Categorical branch one-hot encodes with ``handle_unknown="ignore"``.
     """
     check_training_leakage(FEATURE_COLUMNS)
     numeric = Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
             ("scale", StandardScaler()),
         ]
     )
@@ -126,20 +133,16 @@ def build_torch_vocabularies(fit_frame: pd.DataFrame) -> TorchVocabularies:
         working = fit_frame.copy()
         working["bathrooms"] = pd.array([pd.NA] * len(fit_frame), dtype="Float64")
 
+    # Delegate the "median or 0.0 fallback" policy to the shared helper
+    # so classical and torch models agree byte-for-byte on the impute
+    # value for any all-null / absent numeric column.
+    impute_values, imputation_sources = resolve_numeric_imputation_values(working)
+
     numeric_mean: dict[str, float] = {}
     numeric_std: dict[str, float] = {}
-    numeric_impute: dict[str, float] = {}
     for column in NUMERIC_FEATURES:
         values = pd.to_numeric(working[column], errors="coerce").astype(float)
-        if values.isnull().any():
-            non_null = values.dropna()
-            if non_null.empty:
-                raise ValueError(
-                    f"cannot compute median for '{column}': no non-null training values"
-                )
-            median = float(non_null.median())
-            values = values.fillna(median)
-            numeric_impute[column] = median
+        values = values.fillna(impute_values[column])
         mean = float(values.mean())
         std = float(values.std(ddof=0))
         if std == 0.0:
@@ -152,7 +155,8 @@ def build_torch_vocabularies(fit_frame: pd.DataFrame) -> TorchVocabularies:
         property_type=property_vocab,
         numeric_mean=numeric_mean,
         numeric_std=numeric_std,
-        numeric_impute_values=numeric_impute,
+        numeric_impute_values=dict(impute_values),
+        imputation_sources=dict(imputation_sources),
     )
 
 
@@ -178,12 +182,7 @@ def encode_torch_frame(
     for column in NUMERIC_FEATURES:
         values = pd.to_numeric(working[column], errors="coerce").astype(float)
         if values.isnull().any():
-            fill_value = vocabularies.numeric_impute_values.get(column)
-            if fill_value is None:
-                raise ValueError(
-                    f"unexpected null in feature '{column}' during encoding — "
-                    "the fit frame did not record an impute value"
-                )
+            fill_value = vocabularies.numeric_impute_values.get(column, CONSTANT_FALLBACK)
             values = values.fillna(fill_value)
         arr = values.to_numpy()
         std = vocabularies.numeric_std[column]
