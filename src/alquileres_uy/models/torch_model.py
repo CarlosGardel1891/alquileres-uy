@@ -1,15 +1,16 @@
 """PyTorch tabular regressor with lazy import.
 
-The module exposes :func:`fit_torch_model` and :class:`TorchTabularModel`.
-``torch`` itself is only imported when either function runs, so the
-classical training path (CI job 1, ``pytest -m 'not torch'``) does not
-need the PyTorch wheel installed.
+The module exposes :func:`tune_torch_model` (train-only fit with early
+stopping against validation) and :func:`refit_torch_model` (train +
+validation refit for exactly ``best_epoch + 1`` epochs, no early
+stopping, same seed and architecture). ``torch`` itself is only
+imported when either function runs, so the classical training path (CI
+job 1, ``pytest -m 'not torch'``) does not need the PyTorch wheel.
 
 Serving path exclusion: PyTorch participates in the metric comparison
-but is deliberately excluded from the serving bundle because the future
-API image will not carry a PyTorch runtime. Serialization uses
-``state_dict`` (not ``pickle``) so a small config JSON is enough to
-rebuild the architecture on load.
+but is deliberately excluded from the serving bundle. Serialization
+uses ``state_dict`` (not ``pickle``) so a small config JSON is enough
+to rebuild the architecture on load.
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ class TorchTrainingHistory:
     validation_mae: list[float] = field(default_factory=list)
     best_epoch: int = -1
     stopped_at_epoch: int = -1
+    final_epochs: int | None = None
 
 
 @dataclass
@@ -131,6 +133,7 @@ class TorchTabularModel:
     history: TorchTrainingHistory
     seed: int
     train_row_count: int
+    stage: str = "tuning"  # "tuning" or "final"
     version: str = TORCH_MODEL_VERSION
     eligible_for_api_serving: bool = False
 
@@ -159,6 +162,7 @@ class TorchTabularModel:
             {
                 "mean": self.vocabularies.numeric_mean,
                 "std": self.vocabularies.numeric_std,
+                "impute_values": self.vocabularies.numeric_impute_values,
                 "feature_order": list(NUMERIC_FEATURES),
             },
         )
@@ -170,8 +174,10 @@ class TorchTabularModel:
                 "validation_mae": list(self.history.validation_mae),
                 "best_epoch": self.history.best_epoch,
                 "stopped_at_epoch": self.history.stopped_at_epoch,
+                "final_epochs": self.history.final_epochs,
                 "seed": self.seed,
                 "train_row_count": self.train_row_count,
+                "stage": self.stage,
                 "eligible_for_api_serving": self.eligible_for_api_serving,
             },
         )
@@ -199,6 +205,9 @@ class TorchTabularModel:
             property_type=dict(vocab_payload["property_type"]),
             numeric_mean={str(k): float(v) for k, v in vocab_payload["numeric_mean"].items()},
             numeric_std={str(k): float(v) for k, v in vocab_payload["numeric_std"].items()},
+            numeric_impute_values={
+                str(k): float(v) for k, v in vocab_payload.get("numeric_impute_values", {}).items()
+            },
         )
         module = _build_module(config)
         module.load_state_dict(
@@ -210,6 +219,11 @@ class TorchTabularModel:
             validation_mae=[float(v) for v in history_payload.get("validation_mae", [])],
             best_epoch=int(history_payload.get("best_epoch", -1)),
             stopped_at_epoch=int(history_payload.get("stopped_at_epoch", -1)),
+            final_epochs=(
+                int(history_payload["final_epochs"])
+                if history_payload.get("final_epochs") is not None
+                else None
+            ),
         )
         return cls(
             module=module,
@@ -218,11 +232,24 @@ class TorchTabularModel:
             history=history,
             seed=int(history_payload.get("seed", 0)),
             train_row_count=int(history_payload.get("train_row_count", 0)),
+            stage=str(history_payload.get("stage", "final")),
             eligible_for_api_serving=bool(history_payload.get("eligible_for_api_serving", False)),
         )
 
 
-def fit_torch_model(
+def _build_config(vocabs: TorchVocabularies, numeric_dim: int) -> TorchModelConfig:
+    return TorchModelConfig(
+        numeric_dim=numeric_dim,
+        neighborhood_vocab_size=max(len(vocabs.neighborhood), 2),
+        property_vocab_size=max(len(vocabs.property_type), 2),
+        neighborhood_embedding_dim=min(8, max(2, len(vocabs.neighborhood) // 2)),
+        property_embedding_dim=2,
+        hidden_sizes=[64, 32],
+        dropout=0.1,
+    )
+
+
+def tune_torch_model(
     train_frame: pd.DataFrame,
     validation_frame: pd.DataFrame,
     *,
@@ -232,6 +259,7 @@ def fit_torch_model(
     patience: int,
     batch_size: int,
 ) -> TorchTabularModel:
+    """Tune the torch model on train only, using validation for early stopping."""
     torch = _import_torch()
     from torch import nn
     from torch.utils.data import DataLoader, TensorDataset
@@ -250,15 +278,7 @@ def fit_torch_model(
         .to_numpy()
     )
 
-    config = TorchModelConfig(
-        numeric_dim=train_numeric.shape[1],
-        neighborhood_vocab_size=max(len(vocabularies.neighborhood), 2),
-        property_vocab_size=max(len(vocabularies.property_type), 2),
-        neighborhood_embedding_dim=min(8, max(2, len(vocabularies.neighborhood) // 2)),
-        property_embedding_dim=2,
-        hidden_sizes=[64, 32],
-        dropout=0.1,
-    )
+    config = _build_config(vocabularies, numeric_dim=train_numeric.shape[1])
     module = _build_module(config)
     optimizer = torch.optim.Adam(module.parameters(), lr=1e-3)
     loss_fn = nn.SmoothL1Loss()
@@ -270,7 +290,15 @@ def fit_torch_model(
         torch.from_numpy(train_prop),
         torch.from_numpy(train_target),
     )
-    loader = DataLoader(dataset, batch_size=effective_batch, shuffle=True, num_workers=0)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    loader = DataLoader(
+        dataset,
+        batch_size=effective_batch,
+        shuffle=True,
+        num_workers=0,
+        generator=generator,
+    )
 
     val_numeric_t = torch.from_numpy(val_numeric)
     val_neigh_t = torch.from_numpy(val_neigh)
@@ -330,6 +358,90 @@ def fit_torch_model(
         history=history,
         seed=seed,
         train_row_count=int(len(train_frame)),
+        stage="tuning",
+    )
+
+
+def refit_torch_model(
+    train_validation_frame: pd.DataFrame,
+    *,
+    target_column: str,
+    seed: int,
+    batch_size: int,
+    tuning_model: TorchTabularModel,
+) -> TorchTabularModel:
+    """Refit torch on train + validation for exactly best_epoch + 1 epochs."""
+    torch = _import_torch()
+    from torch import nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    _seed_everything(seed)
+
+    vocabularies = build_torch_vocabularies(train_validation_frame)
+    neigh_idx, prop_idx, numeric = encode_torch_frame(train_validation_frame, vocabularies)
+    target = (
+        pd.to_numeric(train_validation_frame[target_column], errors="coerce")
+        .astype(np.float32)
+        .to_numpy()
+    )
+
+    config = _build_config(vocabularies, numeric_dim=numeric.shape[1])
+    module = _build_module(config)
+    optimizer = torch.optim.Adam(module.parameters(), lr=1e-3)
+    loss_fn = nn.SmoothL1Loss()
+
+    effective_batch = max(1, min(batch_size, len(train_validation_frame)))
+    dataset = TensorDataset(
+        torch.from_numpy(numeric),
+        torch.from_numpy(neigh_idx),
+        torch.from_numpy(prop_idx),
+        torch.from_numpy(target),
+    )
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    loader = DataLoader(
+        dataset,
+        batch_size=effective_batch,
+        shuffle=True,
+        num_workers=0,
+        generator=generator,
+    )
+
+    best_epoch = tuning_model.history.best_epoch if tuning_model.history.best_epoch >= 0 else 0
+    final_epochs = best_epoch + 1
+
+    train_loss_history: list[float] = []
+    for _epoch in range(final_epochs):
+        module.train()
+        running_loss = 0.0
+        seen = 0
+        for numeric_batch, neigh_batch, prop_batch, target_batch in loader:
+            optimizer.zero_grad()
+            output = module(numeric_batch, neigh_batch, prop_batch)
+            loss = loss_fn(output, target_batch)
+            loss.backward()
+            optimizer.step()
+            batch_len = int(numeric_batch.shape[0])
+            running_loss += float(loss.detach().item()) * batch_len
+            seen += batch_len
+        train_loss_history.append(running_loss / max(1, seen))
+
+    history = TorchTrainingHistory(
+        train_loss=train_loss_history,
+        validation_loss=[],
+        validation_mae=[],
+        best_epoch=best_epoch,
+        stopped_at_epoch=final_epochs - 1,
+        final_epochs=final_epochs,
+    )
+    return TorchTabularModel(
+        module=module,
+        config=config,
+        vocabularies=vocabularies,
+        history=history,
+        seed=seed,
+        train_row_count=int(len(train_validation_frame)),
+        stage="final",
     )
 
 
@@ -354,5 +466,6 @@ __all__ = [
     "TorchNotAvailableError",
     "TorchTabularModel",
     "TorchTrainingHistory",
-    "fit_torch_model",
+    "refit_torch_model",
+    "tune_torch_model",
 ]

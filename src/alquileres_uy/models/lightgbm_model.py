@@ -1,10 +1,13 @@
-"""LightGBM regressor with a small deterministic grid.
+"""LightGBM regressor with tuning + final refit separation.
 
-Uses ``LGBMRegressor`` with ``n_jobs=1`` and a fixed random_state for
-reproducibility. Grid picks the configuration with the lowest
-validation MAE (test never seen). Final refit uses train + validation
-and inherits the winning ``best_iteration_`` from the tuning pass as
-``n_estimators`` for the refit.
+* :func:`tune_lightgbm` fits every grid cell on **train only**, feeding
+  validation solely as ``eval_set`` for early stopping and MAE
+  comparison. The returned tuning model is the winning configuration
+  still fit on train alone.
+* :func:`refit_lightgbm` builds a new pipeline with the tuning
+  hyperparameters and ``n_estimators=best_iteration``, then fits on
+  ``train + validation`` **without** any eval_set (test is never
+  observed).
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ class LightGBMModel:
     validation_mae_by_config: list[dict]
     feature_importance: dict[str, float]
     train_row_count: int
+    stage: str  # "tuning" or "final"
     version: str = LIGHTGBM_MODEL_VERSION
 
     def predict(self, frame: pd.DataFrame) -> np.ndarray:
@@ -66,6 +70,7 @@ class LightGBMModel:
                 str(k): float(v) for k, v in metadata["feature_importance"].items()
             },
             train_row_count=int(metadata["train_row_count"]),
+            stage=str(metadata.get("stage", "final")),
             version=str(metadata.get("version", LIGHTGBM_MODEL_VERSION)),
         )
 
@@ -77,17 +82,19 @@ class LightGBMModel:
             "validation_mae_by_config": list(self.validation_mae_by_config),
             "feature_importance": dict(self.feature_importance),
             "train_row_count": self.train_row_count,
+            "stage": self.stage,
             "version": self.version,
         }
 
 
-def fit_lightgbm(
+def tune_lightgbm(
     train_frame: pd.DataFrame,
     validation_frame: pd.DataFrame,
     *,
     target_column: str,
     seed: int,
 ) -> LightGBMModel:
+    """Grid-search LightGBM on train + validation and return the tuning model."""
     train_features = feature_frame(train_frame)
     validation_features = feature_frame(validation_frame)
     train_target = (
@@ -120,8 +127,6 @@ def fit_lightgbm(
                 ),
             ]
         )
-        # Fit preprocessor on train only, then feed transformed validation
-        # to the LightGBM callback for early stopping.
         preprocessor = pipeline.named_steps["preprocess"]
         preprocessor.fit(train_features)
         train_matrix = preprocessor.transform(train_features)
@@ -152,9 +157,39 @@ def fit_lightgbm(
     if best_config is None or best_pipeline is None:
         raise ValueError("LightGBM tuning produced no valid model")
 
-    # Refit final on train + validation with fixed n_estimators = best_iteration.
-    combined_features = pd.concat([train_features, validation_features], ignore_index=True)
-    combined_target = np.concatenate([train_target, validation_target])
+    feature_names = tuple(resolve_feature_names(best_pipeline.named_steps["preprocess"]))
+    booster = best_pipeline.named_steps["lightgbm"].booster_
+    importance_values = booster.feature_importance(importance_type="gain")
+    feature_importance = {
+        str(name): float(value)
+        for name, value in zip(feature_names, importance_values, strict=False)
+    }
+    return LightGBMModel(
+        pipeline=best_pipeline,
+        hyperparameters=dict(best_config),
+        feature_names=feature_names,
+        best_iteration=int(best_iteration),
+        validation_mae_by_config=tuning_results,
+        feature_importance=feature_importance,
+        train_row_count=int(len(train_frame)),
+        stage="tuning",
+    )
+
+
+def refit_lightgbm(
+    train_validation_frame: pd.DataFrame,
+    *,
+    target_column: str,
+    seed: int,
+    tuning_model: LightGBMModel,
+) -> LightGBMModel:
+    """Refit LightGBM with the tuning HP/best_iteration on train + validation."""
+    features = feature_frame(train_validation_frame)
+    target = (
+        pd.to_numeric(train_validation_frame[target_column], errors="coerce")
+        .astype(float)
+        .to_numpy()
+    )
     final_pipeline = Pipeline(
         steps=[
             ("preprocess", build_preprocessor()),
@@ -164,16 +199,15 @@ def fit_lightgbm(
                     objective="regression_l1",
                     random_state=seed,
                     n_jobs=1,
-                    n_estimators=best_iteration,
+                    n_estimators=tuning_model.best_iteration,
                     deterministic=True,
                     verbose=-1,
-                    **best_config,
+                    **tuning_model.hyperparameters,
                 ),
             ),
         ]
     )
-    final_pipeline.fit(combined_features, combined_target)
-
+    final_pipeline.fit(features, target)
     feature_names = tuple(resolve_feature_names(final_pipeline.named_steps["preprocess"]))
     booster = final_pipeline.named_steps["lightgbm"].booster_
     importance_values = booster.feature_importance(importance_type="gain")
@@ -181,16 +215,21 @@ def fit_lightgbm(
         str(name): float(value)
         for name, value in zip(feature_names, importance_values, strict=False)
     }
-
     return LightGBMModel(
         pipeline=final_pipeline,
-        hyperparameters=dict(best_config),
+        hyperparameters=dict(tuning_model.hyperparameters),
         feature_names=feature_names,
-        best_iteration=int(best_iteration),
-        validation_mae_by_config=tuning_results,
+        best_iteration=int(tuning_model.best_iteration),
+        validation_mae_by_config=list(tuning_model.validation_mae_by_config),
         feature_importance=feature_importance,
-        train_row_count=int(len(train_frame) + len(validation_frame)),
+        train_row_count=int(len(train_validation_frame)),
+        stage="final",
     )
 
 
-__all__ = ["LIGHTGBM_MODEL_VERSION", "LightGBMModel", "fit_lightgbm"]
+__all__ = [
+    "LIGHTGBM_MODEL_VERSION",
+    "LightGBMModel",
+    "refit_lightgbm",
+    "tune_lightgbm",
+]

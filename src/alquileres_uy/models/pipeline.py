@@ -1,24 +1,41 @@
 """End-to-end orchestration of the training pipeline.
 
-The pipeline is contract-first: every ETL run passes through
-:func:`~alquileres_uy.models.contracts.load_training_input` before any
-model is fit. Everything else is deterministic: the seed drives the
-Python / NumPy / (optionally) Torch RNGs, the split is temporal, and
-each estimator is fit on train (or train+validation for the final
-refit) using a fixed grid.
+Protocol (contract-first, no test leakage):
 
-Output layout under ``<output-dir>/<timestamp>_<training-run-id>``:
+1. **Tuning stage** — every candidate is fit on the training partition
+   only. Baseline uses the train medians; Ridge picks its alpha on
+   validation; LightGBM tunes its grid + best_iteration on validation;
+   PyTorch trains with validation as early-stopping signal and
+   restores the best state. Nothing peeks at test.
+2. **Validation metrics** — computed with the tuning models. These
+   metrics are the exclusive input to selection.
+3. **Selection** — best_overall (MAE, MAPE, name) across all four
+   candidates; serving_candidate anchored to the smallest eligible MAE
+   with the simplest model chosen inside the practical-tie tolerance.
+4. **Final refit** — fresh models built with the frozen tuning
+   configuration are fit on ``train + validation``. Test is never
+   observed during fitting.
+5. **Test metrics** — computed once from the final models.
+6. **Residual interval** — computed on validation using the tuning
+   model of the serving candidate, so the interval stays out-of-sample.
+7. **Serving bundle** — contains the *final* serving candidate.
+8. **Predictions.parquet** — includes train / validation / test for
+   every candidate, with a ``model_stage`` column identifying which
+   object produced each row.
+
+Output layout under ``<output-dir>/<timestamp>_<training-run-id[:8]>``:
 
     metrics.json
     model_selection.json
     dataset_profile.json
     split_manifest.json
     reproducibility.json
+    training_config.json
+    training_summary.json
+    training_lineage.json
     predictions.parquet
     worst_errors.csv
     error_analysis.json
-    training_summary.json
-    training_lineage.json
     models/
         baseline.json
         linear.joblib
@@ -38,6 +55,7 @@ Output layout under ``<output-dir>/<timestamp>_<training-run-id>``:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import platform
@@ -64,7 +82,7 @@ from .artifacts import (
     sha256_file,
     write_json,
 )
-from .baseline import fit_baseline
+from .baseline import refit_baseline, tune_baseline
 from .config import (
     CATEGORICAL_FEATURES,
     CLASSICAL_MODEL_NAMES,
@@ -74,6 +92,7 @@ from .config import (
     PLOTS_DIRNAME,
     SERVING_BUNDLE_DIRNAME,
     TARGET_COLUMN,
+    TRAINING_PROTOCOL_VERSION,
     TrainingConfig,
 )
 from .contracts import (
@@ -82,14 +101,11 @@ from .contracts import (
     load_etl_approval,
     load_training_input,
 )
-from .lightgbm_model import fit_lightgbm
-from .linear import fit_linear
+from .lightgbm_model import refit_lightgbm, tune_lightgbm
+from .linear import refit_linear, tune_linear
 from .metrics import compute_metrics
-from .selection import select_models
-from .serving import (
-    build_serving_bundle,
-    compute_residual_interval,
-)
+from .selection import SERVING_TIE_TOLERANCE, select_models
+from .serving import build_serving_bundle, compute_residual_interval
 from .split import temporal_split
 
 _LOGGER = logging.getLogger(__name__)
@@ -151,8 +167,10 @@ def dry_run(config: TrainingConfig) -> dict[str, Any]:
 
 def run(config: TrainingConfig) -> TrainingResult:
     training_input = load_training_input(config.etl_run_dir)
+    approval_hash: str | None = None
     if not config.fixture_mode:
         load_etl_approval(config.etl_approval_path, training_input)  # type: ignore[arg-type]
+        approval_hash = _sha256_of(config.etl_approval_path)  # type: ignore[arg-type]
     _ensure_mode_matches(config, training_input)
 
     if config.include_torch and not _torch_available():
@@ -164,7 +182,7 @@ def run(config: TrainingConfig) -> TrainingResult:
     set_global_seed(config.seed, include_torch=config.include_torch)
 
     started_at = datetime.now(tz=UTC)
-    training_run_id = uuid.uuid4().hex
+    training_run_id = uuid.uuid4().hex  # distinct from etl_run_id
     timestamp = started_at.strftime("%Y-%m-%dT%H%M%SZ")
     final_dir = Path(config.output_dir) / f"{timestamp}_{training_run_id[:8]}"
 
@@ -174,11 +192,99 @@ def run(config: TrainingConfig) -> TrainingResult:
         validation_fraction=config.validation_fraction,
         test_fraction=config.test_fraction,
     )
+    train_validation = pd.concat([split.train, split.validation], ignore_index=True)
 
-    fitted: dict[str, Any] = {}
+    # ---- Stage A — tuning models (train only) --------------------------
+    tuning_models: dict[str, Any] = {}
+    tuning_models["baseline"] = tune_baseline(
+        split.train, data_mode=training_input.data_mode, input_hashes=training_input.input_hashes
+    )
+    tuning_models["linear"] = tune_linear(
+        split.train,
+        split.validation,
+        target_column=TARGET_COLUMN,
+        alphas=config.ridge_alphas,
+    )
+    tuning_models["lightgbm"] = tune_lightgbm(
+        split.train, split.validation, target_column=TARGET_COLUMN, seed=config.seed
+    )
+    if config.include_torch:
+        from .torch_model import tune_torch_model
+
+        tuning_models["torch"] = tune_torch_model(
+            split.train,
+            split.validation,
+            target_column=TARGET_COLUMN,
+            seed=config.seed,
+            max_epochs=config.max_epochs,
+            patience=config.patience,
+            batch_size=config.torch_batch_size,
+        )
+
+    # ---- Stage B — validation metrics from tuning models --------------
+    val_target = split.validation[TARGET_COLUMN].astype(float).to_numpy()
     validation_metrics: dict[str, dict[str, float]] = {}
+    tuning_validation_predictions: dict[str, np.ndarray] = {}
+    for name, tuning_model in tuning_models.items():
+        pred = tuning_model.predict(split.validation)
+        tuning_validation_predictions[name] = pred
+        validation_metrics[name] = compute_metrics(val_target, pred).as_json()
+    baseline_val_mae = validation_metrics["baseline"]["mae_usd"]
+    for name in validation_metrics:
+        validation_metrics[name]["improvement_vs_baseline"] = _improvement(
+            baseline_val_mae, validation_metrics[name]["mae_usd"]
+        )
+
+    # ---- Stage B — selection (before any final refit) -----------------
+    selection = select_models(validation_metrics, data_mode=training_input.data_mode)
+
+    # ---- Stage C — final refits on train + validation -----------------
+    final_models: dict[str, Any] = {}
+    final_models["baseline"] = refit_baseline(
+        train_validation,
+        data_mode=training_input.data_mode,
+        input_hashes=training_input.input_hashes,
+    )
+    final_models["linear"] = refit_linear(
+        train_validation,
+        target_column=TARGET_COLUMN,
+        tuning_model=tuning_models["linear"],
+    )
+    final_models["lightgbm"] = refit_lightgbm(
+        train_validation,
+        target_column=TARGET_COLUMN,
+        seed=config.seed,
+        tuning_model=tuning_models["lightgbm"],
+    )
+    if config.include_torch:
+        from .torch_model import refit_torch_model
+
+        final_models["torch"] = refit_torch_model(
+            train_validation,
+            target_column=TARGET_COLUMN,
+            seed=config.seed,
+            batch_size=config.torch_batch_size,
+            tuning_model=tuning_models["torch"],
+        )
+
+    # ---- Stage D — test metrics from final models ---------------------
+    test_target = split.test[TARGET_COLUMN].astype(float).to_numpy()
     test_metrics: dict[str, dict[str, float]] = {}
-    predictions_frames: list[pd.DataFrame] = []
+    for name, final in final_models.items():
+        pred = final.predict(split.test)
+        test_metrics[name] = compute_metrics(test_target, pred).as_json()
+    baseline_test_mae = test_metrics["baseline"]["mae_usd"]
+    for name in test_metrics:
+        test_metrics[name]["improvement_vs_baseline"] = _improvement(
+            baseline_test_mae, test_metrics[name]["mae_usd"]
+        )
+
+    # ---- Residual interval — validation, tuning serving candidate ----
+    residual_interval = compute_residual_interval(
+        val_target,
+        tuning_validation_predictions[selection.serving_candidate],
+        data_mode=training_input.data_mode,
+    )
 
     with atomic_run_directory(final_dir) as tmp_dir:
         models_dir = tmp_dir / MODELS_DIRNAME
@@ -186,83 +292,20 @@ def run(config: TrainingConfig) -> TrainingResult:
         plots_dir = tmp_dir / PLOTS_DIRNAME
         plots_dir.mkdir()
 
-        baseline = fit_baseline(
-            split.train,
-            data_mode=training_input.data_mode,
-            input_hashes=training_input.input_hashes,
-        )
-        baseline.save(models_dir / "baseline.json")
-        fitted["baseline"] = baseline
+        # Persist the final models — never the tuning ones.
+        final_models["baseline"].save(models_dir / "baseline.json")
+        final_models["linear"].save(models_dir / "linear.joblib")
+        final_models["lightgbm"].save(models_dir / "lightgbm.joblib")
+        if "torch" in final_models:
+            final_models["torch"].save(models_dir / "torch")
 
-        linear = fit_linear(
-            split.train,
-            split.validation,
-            target_column=TARGET_COLUMN,
-            alphas=config.ridge_alphas,
-        )
-        linear.save(models_dir / "linear.joblib")
-        fitted["linear"] = linear
-
-        lightgbm_model = fit_lightgbm(
-            split.train, split.validation, target_column=TARGET_COLUMN, seed=config.seed
-        )
-        lightgbm_model.save(models_dir / "lightgbm.joblib")
-        fitted["lightgbm"] = lightgbm_model
-
-        torch_model = None
-        if config.include_torch:
-            from .torch_model import fit_torch_model
-
-            torch_model = fit_torch_model(
-                split.train,
-                split.validation,
-                target_column=TARGET_COLUMN,
-                seed=config.seed,
-                max_epochs=config.max_epochs,
-                patience=config.patience,
-                batch_size=config.torch_batch_size,
-            )
-            torch_model.save(models_dir / "torch")
-            fitted["torch"] = torch_model
-
-        val_target = split.validation[TARGET_COLUMN].astype(float).to_numpy()
-        test_target = split.test[TARGET_COLUMN].astype(float).to_numpy()
-
-        for name, model in fitted.items():
-            val_pred = model.predict(split.validation)
-            test_pred = model.predict(split.test)
-            val_metric = compute_metrics(val_target, val_pred)
-            test_metric = compute_metrics(test_target, test_pred)
-            validation_metrics[name] = val_metric.as_json()
-            test_metrics[name] = test_metric.as_json()
-            predictions_frames.append(
-                _predictions_frame(split.validation, "validation", name, val_pred)
-            )
-            predictions_frames.append(_predictions_frame(split.test, "test", name, test_pred))
-
-        baseline_val_mae = validation_metrics["baseline"]["mae_usd"]
-        baseline_test_mae = test_metrics["baseline"]["mae_usd"]
-        for name in validation_metrics:
-            validation_metrics[name]["improvement_vs_baseline"] = _improvement(
-                baseline_val_mae, validation_metrics[name]["mae_usd"]
-            )
-            test_metrics[name]["improvement_vs_baseline"] = _improvement(
-                baseline_test_mae, test_metrics[name]["mae_usd"]
-            )
-
-        selection = select_models(validation_metrics, data_mode=training_input.data_mode)
         deployable = training_input.data_mode == "real"
-
-        serving_object = fitted[selection.serving_candidate]
-        val_serving_pred = serving_object.predict(split.validation)
-        residual_interval = compute_residual_interval(
-            val_target, val_serving_pred, data_mode=training_input.data_mode
-        )
+        serving_final = final_models[selection.serving_candidate]
         bundle_dir = tmp_dir / SERVING_BUNDLE_DIRNAME
         build_serving_bundle(
             bundle_dir,
             model_name=selection.serving_candidate,
-            model_object=serving_object,
+            model_object=serving_final,
             validation_metrics=validation_metrics[selection.serving_candidate],
             test_metrics=test_metrics[selection.serving_candidate],
             residual_interval=residual_interval,
@@ -274,19 +317,58 @@ def run(config: TrainingConfig) -> TrainingResult:
             trained_at=started_at.isoformat(),
         )
 
+        predictions_frames: list[pd.DataFrame] = []
+        for name, tuning_model in tuning_models.items():
+            predictions_frames.append(
+                _predictions_frame(
+                    split.train,
+                    "train",
+                    name,
+                    tuning_model.predict(split.train),
+                    stage="tuning_model",
+                )
+            )
+            predictions_frames.append(
+                _predictions_frame(
+                    split.validation,
+                    "validation",
+                    name,
+                    tuning_validation_predictions[name],
+                    stage="tuning_model",
+                )
+            )
+        for name, final in final_models.items():
+            predictions_frames.append(
+                _predictions_frame(
+                    split.test,
+                    "test",
+                    name,
+                    final.predict(split.test),
+                    stage="final_refit",
+                )
+            )
+
         _write_predictions(predictions_frames, tmp_dir / "predictions.parquet")
         _write_worst_errors_and_analysis(
-            predictions_frames, tmp_dir, split=split, serving=selection.serving_candidate
+            predictions_frames, tmp_dir, serving=selection.serving_candidate
         )
         _write_metrics_json(tmp_dir, training_input, validation_metrics, test_metrics)
         _write_selection_json(tmp_dir, selection, deployable=deployable)
         _write_split_manifest(tmp_dir, split, config)
         _write_dataset_profile(tmp_dir, training_input, split)
         _write_reproducibility(tmp_dir, config, training_input)
-        _generate_plots(plots_dir, split, fitted, selection, training_input.data_mode)
+        _write_training_config_json(
+            tmp_dir,
+            config=config,
+            training_input=training_input,
+            training_run_id=training_run_id,
+        )
+        _generate_plots(
+            plots_dir, split, tuning_models, final_models, selection, training_input.data_mode
+        )
 
         finished_at = datetime.now(tz=UTC)
-        summary_path = _write_training_summary(
+        _write_training_summary(
             tmp_dir,
             training_run_id=training_run_id,
             data_mode=training_input.data_mode,
@@ -294,25 +376,30 @@ def run(config: TrainingConfig) -> TrainingResult:
             finished_at=finished_at,
             seed=config.seed,
             etl_run_id=training_input.etl_run_id,
-            models=list(fitted.keys()),
+            models=list(final_models.keys()),
             serving_candidate=selection.serving_candidate,
             best_overall=selection.best_overall_model,
             row_counts={
                 "train": len(split.train),
                 "validation": len(split.validation),
                 "test": len(split.test),
+                "train_validation": len(train_validation),
             },
+            tuning_row_count=len(split.train),
+            final_refit_row_count=len(train_validation),
             artifact_dir=tmp_dir,
         )
         _write_training_lineage(
             tmp_dir,
             training_input=training_input,
-            summary_path=summary_path,
+            training_run_id=training_run_id,
+            approval_hash=approval_hash,
         )
 
     _LOGGER.info(
-        "training complete: run_id=%s serving=%s output=%s",
+        "training complete: training_run_id=%s etl_run_id=%s serving=%s output=%s",
         training_run_id,
+        training_input.etl_run_id,
         selection.serving_candidate,
         final_dir,
     )
@@ -376,7 +463,7 @@ def _torch_available() -> bool:
 
 
 def _predictions_frame(
-    frame: pd.DataFrame, split_name: str, model_name: str, pred: np.ndarray
+    frame: pd.DataFrame, split_name: str, model_name: str, pred: np.ndarray, *, stage: str
 ) -> pd.DataFrame:
     result = frame[
         [
@@ -395,17 +482,16 @@ def _predictions_frame(
         result["bathrooms"] = pd.NA
     result["split"] = split_name
     result["model_name"] = model_name
+    result["model_stage"] = stage
     result["predicted_price_usd"] = pred.astype(float)
     result = result.rename(columns={TARGET_COLUMN: "actual_price_usd"})
-    result["absolute_error_usd"] = (
-        result["predicted_price_usd"] - result["actual_price_usd"]
-    ).abs()
-    result["residual"] = result["predicted_price_usd"] - result["actual_price_usd"]
+    # Contract convention: residual = actual - predicted.
+    result["residual"] = result["actual_price_usd"] - result["predicted_price_usd"]
+    result["absolute_error_usd"] = result["residual"].abs()
     with np.errstate(divide="ignore", invalid="ignore"):
         result["percentage_error"] = np.where(
             result["actual_price_usd"] > 0,
-            (result["predicted_price_usd"] - result["actual_price_usd"])
-            / result["actual_price_usd"],
+            result["absolute_error_usd"] / result["actual_price_usd"],
             np.nan,
         )
     return result
@@ -418,11 +504,13 @@ def _write_predictions(frames: list[pd.DataFrame], path: Path) -> None:
 
 
 def _write_worst_errors_and_analysis(
-    frames: list[pd.DataFrame], root: Path, *, split, serving: str
+    frames: list[pd.DataFrame], root: Path, *, serving: str
 ) -> None:
     combined = pd.concat(frames, ignore_index=True)
     test_serving = combined[
-        (combined["split"] == "test") & (combined["model_name"] == serving)
+        (combined["split"] == "test")
+        & (combined["model_name"] == serving)
+        & (combined["model_stage"] == "final_refit")
     ].copy()
     top10 = test_serving.sort_values("absolute_error_usd", ascending=False).head(10)
     top10.to_csv(root / "worst_errors.csv", index=False)
@@ -447,8 +535,8 @@ def _write_worst_errors_and_analysis(
         "by_bedrooms": {
             int(k): int(v) for k, v in top10.groupby("bedrooms").size().to_dict().items()
         },
-        "actual_price_min": float(top10["actual_price_usd"].min()),
-        "actual_price_max": float(top10["actual_price_usd"].max()),
+        "actual_price_min": float(top10["actual_price_usd"].min()) if not top10.empty else None,
+        "actual_price_max": float(top10["actual_price_usd"].max()) if not top10.empty else None,
     }
     write_json(root / "error_analysis.json", analysis)
 
@@ -457,6 +545,11 @@ def _write_metrics_json(root: Path, training_input, validation: dict, test: dict
     payload: dict[str, Any] = {
         "data_mode": training_input.data_mode,
         "etl_run_id": training_input.etl_run_id,
+        "protocol": {
+            "training_protocol_version": TRAINING_PROTOCOL_VERSION,
+            "validation_source": "tuning_model",
+            "test_source": "final_refit",
+        },
         "models": {
             name: {"validation": validation[name], "test": test[name]} for name in validation
         },
@@ -545,6 +638,7 @@ def _write_reproducibility(root: Path, config: TrainingConfig, training_input) -
 
     payload = {
         "seed": config.seed,
+        "training_protocol_version": TRAINING_PROTOCOL_VERSION,
         "split_algorithm_version": "temporal-grouped-v1",
         "python_executable": sys.executable,
         "python_version": platform.python_version(),
@@ -585,12 +679,53 @@ def _write_reproducibility(root: Path, config: TrainingConfig, training_input) -
     write_json(root / "reproducibility.json", payload)
 
 
-def _generate_plots(directory: Path, split, fitted: dict, selection, data_mode: str) -> None:
+def _write_training_config_json(
+    root: Path,
+    *,
+    config: TrainingConfig,
+    training_input,
+    training_run_id: str,
+) -> None:
+    payload = {
+        "training_run_id": training_run_id,
+        "training_protocol_version": TRAINING_PROTOCOL_VERSION,
+        "data_mode": training_input.data_mode,
+        "seed": config.seed,
+        "include_torch": config.include_torch,
+        "fractions": {
+            "train": config.train_fraction,
+            "validation": config.validation_fraction,
+            "test": config.test_fraction,
+        },
+        "max_epochs": config.max_epochs,
+        "patience": config.patience,
+        "torch_batch_size": config.torch_batch_size,
+        "ridge_alphas": list(config.ridge_alphas),
+        "lightgbm_grid": [
+            {"learning_rate": 0.05, "num_leaves": 15, "min_child_samples": 5},
+            {"learning_rate": 0.1, "num_leaves": 15, "min_child_samples": 5},
+            {"learning_rate": 0.05, "num_leaves": 31, "min_child_samples": 3},
+            {"learning_rate": 0.1, "num_leaves": 31, "min_child_samples": 3},
+        ],
+        "features": {
+            "numeric": list(NUMERIC_FEATURES),
+            "categorical": list(CATEGORICAL_FEATURES),
+        },
+        "target": TARGET_COLUMN,
+        "split_algorithm_version": "temporal-grouped-v1",
+        "serving_tie_tolerance_usd": SERVING_TIE_TOLERANCE,
+    }
+    write_json(root / "training_config.json", payload)
+
+
+def _generate_plots(
+    directory, split, tuning_models, final_models, selection, data_mode: str
+) -> None:
     directory.mkdir(exist_ok=True)
     y_true = split.test[TARGET_COLUMN].astype(float).to_numpy()
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    for name, model in fitted.items():
+    for name, model in final_models.items():
         pred = model.predict(split.test)
         ax.scatter(y_true, pred, s=14, alpha=0.6, label=name)
     limits = [float(min(y_true.min(), 0)), float(y_true.max()) * 1.1]
@@ -598,14 +733,14 @@ def _generate_plots(directory: Path, split, fitted: dict, selection, data_mode: 
     ax.set_xlabel("Actual price (USD)")
     ax.set_ylabel("Predicted price (USD)")
     prefix = f"{data_mode} — " + ("FIXTURE — NOT PROJECT RESULTS" if data_mode == "fixture" else "")
-    ax.set_title(f"Predicted vs Actual (test) [{prefix.strip(' —')}]")
+    ax.set_title(f"Predicted vs Actual (test, final refit) [{prefix.strip(' —')}]")
     ax.legend()
     fig.tight_layout()
     fig.savefig(directory / "predicted_vs_actual.png", dpi=100)
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    serving = fitted[selection.serving_candidate]
+    serving = final_models[selection.serving_candidate]
     if selection.serving_candidate == "lightgbm":
         importance = serving.feature_importance
         names = list(importance.keys())
@@ -621,10 +756,9 @@ def _generate_plots(directory: Path, split, fitted: dict, selection, data_mode: 
         ax.barh([p["feature"] for p in pairs][::-1], [abs(p["coefficient"]) for p in pairs][::-1])
         ax.set_xlabel("|coefficient|")
     else:
-        # Baseline — plot fallback medians instead.
         keys = list(serving.combined_ppm2.keys())[:12]
         ax.barh(keys, [serving.combined_ppm2[k] for k in keys])
-        ax.set_xlabel("Median price per m² (train)")
+        ax.set_xlabel("Median price per m² (train + validation)")
     ax.set_title(f"Feature importance ({selection.serving_candidate}) [{data_mode}]")
     fig.tight_layout()
     fig.savefig(directory / "feature_importance.png", dpi=100)
@@ -632,12 +766,13 @@ def _generate_plots(directory: Path, split, fitted: dict, selection, data_mode: 
 
     fig, ax = plt.subplots(figsize=(7, 4))
     pred = serving.predict(split.test)
-    residual = pred - y_true
+    # Contract convention: residual = actual - predicted.
+    residual = y_true - pred
     ax.scatter(pred, residual, s=14, alpha=0.6)
     ax.axhline(0, color="black", linewidth=1, linestyle="--")
     ax.set_xlabel("Prediction (USD)")
-    ax.set_ylabel("Residual (USD)")
-    ax.set_title(f"Residuals (test) [{data_mode}]")
+    ax.set_ylabel("Residual: actual - predicted (USD)")
+    ax.set_title(f"Residuals (test, final refit) [{data_mode}]")
     fig.tight_layout()
     fig.savefig(directory / "residuals.png", dpi=100)
     plt.close(fig)
@@ -656,18 +791,23 @@ def _write_training_summary(
     serving_candidate: str,
     best_overall: str,
     row_counts: dict[str, int],
+    tuning_row_count: int,
+    final_refit_row_count: int,
     artifact_dir: Path,
 ) -> Path:
     payload = {
         "training_run_id": training_run_id,
+        "etl_run_id": etl_run_id,
+        "training_protocol_version": TRAINING_PROTOCOL_VERSION,
         "status": "completed",
         "data_mode": data_mode,
         "seed": seed,
-        "etl_run_id": etl_run_id,
         "models_ran": models,
         "serving_candidate": serving_candidate,
         "best_overall_model": best_overall,
         "row_counts": row_counts,
+        "tuning_row_count": tuning_row_count,
+        "final_refit_row_count": final_refit_row_count,
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
         "duration_seconds": (finished_at - started_at).total_seconds(),
@@ -681,22 +821,32 @@ def _write_training_summary(
     return path
 
 
-def _write_training_lineage(root: Path, *, training_input, summary_path: Path) -> None:
-    inputs = {
+def _write_training_lineage(
+    root: Path,
+    *,
+    training_input,
+    training_run_id: str,
+    approval_hash: str | None,
+) -> None:
+    inputs: dict[str, str | None] = {
         "model_ready": training_input.input_hashes.get("model_ready"),
         "etl_summary": training_input.input_hashes.get("etl_summary"),
         "etl_lineage": training_input.input_hashes.get("lineage"),
         "etl_schema": training_input.input_hashes.get("schema"),
+        "training_config": sha256_file(root / "training_config.json"),
     }
-    outputs = {}
+    if training_input.data_mode == "real":
+        inputs["etl_approval"] = approval_hash
+    outputs: dict[str, str] = {}
     for path in iter_files(root):
         if path.name == "training_lineage.json":
             continue
         outputs[str(path.relative_to(root)).replace("\\", "/")] = sha256_file(path)
     payload = {
-        "training_run_id": training_input.etl_run_id,
-        "data_mode": training_input.data_mode,
+        "training_run_id": training_run_id,
         "etl_run_id": training_input.etl_run_id,
+        "training_protocol_version": TRAINING_PROTOCOL_VERSION,
+        "data_mode": training_input.data_mode,
         "inputs_sha256": inputs,
         "outputs_sha256": outputs,
         "lineage_self_hashed": False,
@@ -729,9 +879,11 @@ def _git_commit() -> str | None:
 
 
 def _hash_of(ids: tuple[str, ...]) -> str:
-    import hashlib
-
     return hashlib.sha256("\n".join(str(x) for x in ids).encode("utf-8")).hexdigest()
+
+
+def _sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 __all__ = [
