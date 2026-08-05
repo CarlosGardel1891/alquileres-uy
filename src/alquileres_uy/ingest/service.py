@@ -106,21 +106,23 @@ class _RunState:
 
 
 def _kind_for(relative_path: str) -> str:
-    if relative_path.startswith("items/"):
+    normalized = relative_path.replace("\\", "/")
+    if normalized.startswith("items/"):
         return "item_batch"
-    if relative_path.startswith("descriptions/"):
+    if normalized.startswith("descriptions/"):
         return "description"
-    if relative_path.startswith("searches/"):
+    if normalized.startswith("searches/"):
         return "search_page"
-    if relative_path.startswith("errors/"):
+    if normalized.startswith("errors/"):
         return "error_log"
     return "report"
 
 
 def _track_file(state: _RunState, relative_path: str) -> None:
-    state.files.add(relative_path)
-    if relative_path not in state.file_kinds:
-        state.file_kinds[relative_path] = _kind_for(relative_path)
+    normalized = relative_path.replace("\\", "/")
+    state.files.add(normalized)
+    if normalized not in state.file_kinds:
+        state.file_kinds[normalized] = _kind_for(normalized)
 
 
 def _build_file_entries(state: _RunState, workdir: Path) -> list[dict[str, str]]:
