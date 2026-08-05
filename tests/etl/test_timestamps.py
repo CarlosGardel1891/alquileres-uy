@@ -24,12 +24,27 @@ def _make_run(tmp_path: Path, *, started="2026-08-04T22:00:00Z", finished="2026-
     (tmp_path / "items").mkdir(exist_ok=True)
     batch = tmp_path / "items" / "batch_0001.json"
     batch.write_text(json.dumps([{"code": 200, "body": {"id": "MLU_TEST_1"}}]), encoding="utf-8")
-    (tmp_path / "ingestion_summary.json").write_text(json.dumps({"run_id": "r1"}), encoding="utf-8")
+    summary_path = tmp_path / "ingestion_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "run_id": "r1",
+                "status": "completed",
+                "items_downloaded": 1,
+                "descriptions_downloaded": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
     manifest = {
         "run_id": "r1",
         "source": "mercadolibre",
         "status": "completed",
-        "files": [{"path": "items/batch_0001.json", "kind": "item_batch", "sha256": _sha(batch)}],
+        "files": [
+            {"path": "items/batch_0001.json", "kind": "item_batch", "sha256": _sha(batch)},
+            {"path": "ingestion_summary.json", "kind": "report", "sha256": _sha(summary_path)},
+        ],
+        "summary_path": "ingestion_summary.json",
     }
     if started is not None:
         manifest["started_at"] = started

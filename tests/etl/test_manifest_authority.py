@@ -29,15 +29,45 @@ def _write_description(root: Path, name: str = "MLU_TEST_1.json") -> Path:
     return p
 
 
-def _write_pair(root: Path, *, files: list[dict] | None = None, **overrides):
-    (root / "ingestion_summary.json").write_text(json.dumps({"run_id": "r1"}), encoding="utf-8")
+def _write_summary(root: Path, **overrides) -> Path:
+    body = {
+        "run_id": "r1",
+        "status": "completed",
+        "items_downloaded": 1,
+        "descriptions_downloaded": 0,
+    }
+    body.update(overrides)
+    path = root / "ingestion_summary.json"
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
+def _write_pair(
+    root: Path,
+    *,
+    files: list[dict] | None = None,
+    include_summary_entry: bool = True,
+    summary_overrides: dict | None = None,
+    **overrides,
+):
+    summary_path = _write_summary(root, **(summary_overrides or {}))
+    base_files = list(files) if files is not None else []
+    if include_summary_entry:
+        base_files.append(
+            {
+                "path": "ingestion_summary.json",
+                "kind": "report",
+                "sha256": _sha(summary_path),
+            }
+        )
     base = {
         "run_id": "r1",
         "source": "mercadolibre",
         "status": "completed",
         "started_at": "2026-08-04T22:00:00Z",
         "finished_at": "2026-08-04T22:15:00Z",
-        "files": files if files is not None else [],
+        "files": base_files,
+        "summary_path": "ingestion_summary.json",
     }
     base.update(overrides)
     (root / "manifest.json").write_text(json.dumps(base), encoding="utf-8")
@@ -62,6 +92,7 @@ def test_manifest_governs_descriptions(tmp_path):
             {"path": "items/batch_0001.json", "kind": "item_batch", "sha256": _sha(batch)},
             {"path": "descriptions/MLU_TEST_1.json", "kind": "description", "sha256": _sha(desc)},
         ],
+        summary_overrides={"descriptions_downloaded": 1},
     )
     run = load_raw_run(tmp_path, data_mode="fixture", fixtures_root=tmp_path)
     assert len(run.description_paths) == 1
@@ -177,23 +208,10 @@ def test_unknown_kind_is_rejected(tmp_path):
 
 def test_summary_run_id_mismatch_is_rejected(tmp_path):
     batch = _write_batch(tmp_path)
-    (tmp_path / "ingestion_summary.json").write_text(
-        json.dumps({"run_id": "OTHER"}), encoding="utf-8"
-    )
-    (tmp_path / "manifest.json").write_text(
-        json.dumps(
-            {
-                "run_id": "r1",
-                "source": "mercadolibre",
-                "status": "completed",
-                "started_at": "2026-08-04T22:00:00Z",
-                "finished_at": "2026-08-04T22:15:00Z",
-                "files": [
-                    {"path": "items/batch_0001.json", "kind": "item_batch", "sha256": _sha(batch)}
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _write_pair(
+        tmp_path,
+        files=[{"path": "items/batch_0001.json", "kind": "item_batch", "sha256": _sha(batch)}],
+        summary_overrides={"run_id": "OTHER"},
     )
     with pytest.raises(RawRunValidationError, match="run_id"):
         load_raw_run(tmp_path, data_mode="fixture", fixtures_root=tmp_path)

@@ -65,9 +65,16 @@ def test_parse_plain_number_still_accepts_bedrooms_as_integer():
     assert value == Decimal("3")
 
 
-def test_parse_plain_number_still_accepts_struct_without_unit():
+def test_parse_plain_number_rejects_any_non_empty_unit():
+    # plain_number is strict — the caller must go through parse_count
+    # with allowed_units when a unit is expected.
     value, err = parse_plain_number({"number": 3, "unit": "habitaciones"})
-    # plain_number ignores unit for counts
+    assert value is None
+    assert err == "unsupported_count_unit"
+
+
+def test_parse_plain_number_accepts_struct_without_unit():
+    value, err = parse_plain_number({"number": 3})
     assert err is None
     assert value == Decimal("3")
 

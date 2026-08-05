@@ -22,7 +22,18 @@ def _write_run(root: Path, *, run_id: str, started: str, finished: str, items: l
     batch = items_dir / "batch_0001.json"
     envelopes = [{"code": 200, "body": body} for body in items]
     batch.write_text(json.dumps(envelopes, ensure_ascii=False), encoding="utf-8")
-    (root / "ingestion_summary.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+    summary_path = root / "ingestion_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "status": "completed",
+                "items_downloaded": len(items),
+                "descriptions_downloaded": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
     manifest = {
         "run_id": run_id,
         "source": "mercadolibre",
@@ -30,12 +41,10 @@ def _write_run(root: Path, *, run_id: str, started: str, finished: str, items: l
         "started_at": started,
         "finished_at": finished,
         "files": [
-            {
-                "path": "items/batch_0001.json",
-                "kind": "item_batch",
-                "sha256": _sha(batch),
-            }
+            {"path": "items/batch_0001.json", "kind": "item_batch", "sha256": _sha(batch)},
+            {"path": "ingestion_summary.json", "kind": "report", "sha256": _sha(summary_path)},
         ],
+        "summary_path": "ingestion_summary.json",
     }
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return root
