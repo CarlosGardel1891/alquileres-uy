@@ -199,61 +199,145 @@ def _save_serving_model(model_object: object, path: Path) -> None:
     joblib.dump(model_object, path)
 
 
+_SHA256_HEX_RE = __import__("re").compile(r"^[0-9a-fA-F]{64}$")
+_REQUIRED_BUNDLE_FILES: tuple[str, ...] = (
+    "model.joblib",
+    "metadata.json",
+    "feature_schema.json",
+    "residual_interval.json",
+    "checksums.json",
+)
+_REQUIRED_VERSIONS: tuple[str, ...] = ("python", "numpy", "pandas", "scikit_learn", "joblib")
+
+
 def load_serving_bundle(directory: Path, *, allow_fixture: bool = False) -> dict[str, Any]:
+    """Load a serving bundle, deferring ``joblib.load`` until every gate passes.
+
+    Order:
+
+    1. resolve + confirm every required file exists;
+    2. validate ``checksums.json`` — safe filenames, hex hashes, real hashes;
+    3. only then read ``metadata.json``;
+    4. verify bundle_version / model_type / data_mode / deployable /
+       model_artifact_sha256;
+    5. reject fixture bundles unless ``allow_fixture=True``;
+    6. run :func:`validate_runtime_compatibility`;
+    7. finally: ``joblib.load(model.joblib)``.
+    """
     directory = Path(directory).resolve()
-    metadata_path = directory / "metadata.json"
-    if not metadata_path.is_file():
-        raise ServingBundleError(f"serving bundle metadata missing: {metadata_path}")
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not directory.is_dir():
+        raise ServingBundleError(f"serving bundle directory missing: {directory}")
+
+    for name in _REQUIRED_BUNDLE_FILES:
+        if not (directory / name).is_file():
+            raise ServingBundleError(f"serving bundle missing required file: {name}")
+
+    _validate_checksums(directory)
+
+    metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("bundle_version") != BUNDLE_VERSION:
+        raise ServingBundleError(
+            f"bundle_version mismatch: expected {BUNDLE_VERSION!r}, "
+            f"got {metadata.get('bundle_version')!r}"
+        )
+    model_type = metadata.get("model_type")
+    if model_type not in SERVING_ELIGIBLE_MODEL_NAMES:
+        raise ServingBundleError(f"metadata.model_type is not eligible: {model_type!r}")
+    if metadata.get("data_mode") not in {"fixture", "real"}:
+        raise ServingBundleError(f"metadata.data_mode is invalid: {metadata.get('data_mode')!r}")
+
+    declared_hash = metadata.get("model_artifact_sha256")
+    actual_hash = sha256_file(directory / "model.joblib")
+    if declared_hash != actual_hash:
+        raise ServingBundleError(
+            "metadata.model_artifact_sha256 does not match the model.joblib on disk"
+        )
+
     if not metadata.get("deployable", False) and not allow_fixture:
         raise ServingBundleError(
             "refusing to load a fixture serving bundle; pass allow_fixture=True in tests only"
         )
 
-    _validate_checksums(directory)
+    validate_runtime_compatibility(metadata)
+
     model = joblib.load(directory / "model.joblib")
     return {"metadata": metadata, "model": model}
 
 
 def validate_runtime_compatibility(metadata: dict[str, Any]) -> None:
-    """Raise if the current runtime is incompatible with the bundle."""
-    declared = metadata.get("versions", {})
+    """Raise if the current runtime is incompatible with the bundle.
+
+    All entries in :data:`_REQUIRED_VERSIONS` (plus ``lightgbm`` for
+    lightgbm bundles) must be declared and equal to the runtime. Missing
+    declarations are rejected instead of silently accepted.
+    """
+    declared = metadata.get("versions")
+    if not isinstance(declared, dict):
+        raise ServingBundleError("metadata.versions must be an object")
+
+    for required in _REQUIRED_VERSIONS:
+        if required not in declared or not declared[required]:
+            raise ServingBundleError(f"metadata.versions.{required} is required")
+
     current_python = ".".join(map(str, sys.version_info[:2]))
-    declared_python = ".".join(str(declared.get("python", "")).split(".")[:2])
-    if declared_python and declared_python != current_python:
+    declared_python = ".".join(str(declared["python"]).split(".")[:2])
+    if declared_python != current_python:
         raise ServingBundleError(
             f"python version mismatch: bundle {declared_python}, runtime {current_python}"
         )
-    _check_version("numpy", declared, np.__version__)
-    _check_version("pandas", declared, pd.__version__)
+    _check_exact_version("numpy", declared, np.__version__)
+    _check_exact_version("pandas", declared, pd.__version__)
+
     try:
         import sklearn
+    except ImportError as exc:
+        raise ServingBundleError("bundle requires scikit-learn at runtime") from exc
+    _check_exact_version("scikit_learn", declared, sklearn.__version__)
 
-        _check_version("scikit_learn", declared, sklearn.__version__)
-    except ImportError:
-        pass
+    try:
+        import joblib as _joblib
+    except ImportError as exc:  # pragma: no cover — joblib is a hard dep
+        raise ServingBundleError("bundle requires joblib at runtime") from exc
+    _check_exact_version("joblib", declared, _joblib.__version__)
+
     if metadata.get("model_type") == "lightgbm":
+        if "lightgbm" not in declared or not declared["lightgbm"]:
+            raise ServingBundleError("lightgbm bundle must declare lightgbm version")
         try:
             import lightgbm
-
-            _check_version("lightgbm", declared, lightgbm.__version__)
         except ImportError as exc:
             raise ServingBundleError("lightgbm bundle requires lightgbm at runtime") from exc
+        _check_exact_version("lightgbm", declared, lightgbm.__version__)
 
 
-def _check_version(name: str, declared: dict, runtime: str) -> None:
+def _check_exact_version(name: str, declared: dict, runtime: str) -> None:
     expected = declared.get(name)
-    if expected and expected != runtime:
+    if expected != runtime:
         raise ServingBundleError(f"{name} version mismatch: bundle {expected}, runtime {runtime}")
 
 
 def _validate_checksums(directory: Path) -> None:
     checksum_path = directory / "checksums.json"
-    if not checksum_path.is_file():
-        raise ServingBundleError(f"checksums.json missing in bundle: {directory}")
     declared = json.loads(checksum_path.read_text(encoding="utf-8"))
+    if not isinstance(declared, dict) or not declared:
+        raise ServingBundleError("checksums.json must be a non-empty object")
+    # ``checksums.json`` must never list itself and every entry must map
+    # a safe relative filename to a valid sha256 hex digest.
     for name, expected in declared.items():
-        actual = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+        if not isinstance(name, str) or not name:
+            raise ServingBundleError(f"checksums.json entry name is not a string: {name!r}")
+        if name == "checksums.json":
+            raise ServingBundleError("checksums.json must not declare itself")
+        if "/" in name or "\\" in name or ".." in Path(name).parts or Path(name).is_absolute():
+            raise ServingBundleError(f"checksums.json entry {name!r} is not a safe filename")
+        if not isinstance(expected, str) or not _SHA256_HEX_RE.match(expected):
+            raise ServingBundleError(
+                f"checksums.json entry {name!r} does not carry a sha256 hex digest"
+            )
+        target = directory / name
+        if not target.is_file():
+            raise ServingBundleError(f"checksums.json references missing file {name!r}")
+        actual = hashlib.sha256(target.read_bytes()).hexdigest()
         if actual != expected:
             raise ServingBundleError(f"checksum mismatch for bundle file {name!r}")
 
