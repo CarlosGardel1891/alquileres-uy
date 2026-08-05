@@ -50,6 +50,12 @@ DEFAULT_VALIDATION_FRACTION: float = 0.15
 DEFAULT_TEST_FRACTION: float = 0.15
 SPLIT_ALGORITHM_VERSION: str = "temporal-grouped-v1"
 
+# Training protocol: v2 introduces the strict tune/refit split — validation
+# metrics come from tuning models (train only) and test metrics from the
+# final refit (train + validation), so neither validation nor test leaks
+# into the other stage.
+TRAINING_PROTOCOL_VERSION: str = "tune-then-refit-v2"
+
 # ---- training defaults -----------------------------------------------
 DEFAULT_SEED: int = 42
 DEFAULT_MAX_EPOCHS: int = 200
@@ -143,6 +149,7 @@ __all__ = [
     "SPLIT_ALGORITHM_VERSION",
     "SUPPORTED_ETL_SCHEMA_VERSIONS",
     "TARGET_COLUMN",
+    "TRAINING_PROTOCOL_VERSION",
     "TrainingConfig",
     "TrainingConfigError",
 ]

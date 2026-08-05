@@ -1,9 +1,13 @@
-"""Baseline model: median price per m² per (neighborhood, property_type).
+"""Baseline model: median price per m² by (neighborhood, property_type).
 
 The baseline is intentionally trivial so it acts as a floor for the
 learned models. Prediction is the median USD-per-square-meter for the
 row's group, multiplied by its declared area, with a strict fallback
 chain that guarantees no NaN.
+
+The module exposes two fits — :func:`tune_baseline` (train only) and
+:func:`refit_baseline` (train + validation) — so the pipeline can keep
+tuning models separate from the final refit.
 
 Serialization is plain JSON so the fixture bundle stays trivially
 inspectable and free of any pickled objects.
@@ -88,22 +92,27 @@ class BaselineModel:
 
 
 def fit_baseline(
-    train_frame: pd.DataFrame,
+    fit_frame: pd.DataFrame,
     *,
     data_mode: str,
     input_hashes: dict[str, str],
 ) -> BaselineModel:
-    if train_frame.empty:
-        raise ValueError("baseline requires a non-empty train frame")
-    area = pd.to_numeric(train_frame["total_area_m2"], errors="coerce")
-    price = pd.to_numeric(train_frame[TARGET_COLUMN], errors="coerce")
+    """Fit the baseline on the given frame.
+
+    The caller decides whether ``fit_frame`` is the training partition
+    (tuning stage) or ``train + validation`` (final refit).
+    """
+    if fit_frame.empty:
+        raise ValueError("baseline requires a non-empty fit frame")
+    area = pd.to_numeric(fit_frame["total_area_m2"], errors="coerce")
+    price = pd.to_numeric(fit_frame[TARGET_COLUMN], errors="coerce")
     ppm2 = (price / area).astype(float)
     if not np.isfinite(ppm2).all():
-        raise ValueError("baseline: price_per_m2 is non-finite in train frame")
+        raise ValueError("baseline: price_per_m2 is non-finite in fit frame")
 
     global_median = float(ppm2.median())
     combined_medians: dict[str, float] = {}
-    for (neighborhood, prop), group in train_frame.groupby(
+    for (neighborhood, prop), group in fit_frame.groupby(
         ["neighborhood_normalized", "property_type"], sort=False
     ):
         combined_medians[f"{neighborhood}|{prop}"] = float(
@@ -113,7 +122,7 @@ def fit_baseline(
             ).median()
         )
     neighborhood_medians: dict[str, float] = {}
-    for neighborhood, group in train_frame.groupby("neighborhood_normalized", sort=False):
+    for neighborhood, group in fit_frame.groupby("neighborhood_normalized", sort=False):
         neighborhood_medians[str(neighborhood)] = float(
             (
                 pd.to_numeric(group[TARGET_COLUMN], errors="coerce")
@@ -121,7 +130,7 @@ def fit_baseline(
             ).median()
         )
     property_medians: dict[str, float] = {}
-    for prop, group in train_frame.groupby("property_type", sort=False):
+    for prop, group in fit_frame.groupby("property_type", sort=False):
         property_medians[str(prop)] = float(
             (
                 pd.to_numeric(group[TARGET_COLUMN], errors="coerce")
@@ -134,10 +143,30 @@ def fit_baseline(
         neighborhood_ppm2=neighborhood_medians,
         property_ppm2=property_medians,
         combined_ppm2=combined_medians,
-        train_row_count=int(len(train_frame)),
+        train_row_count=int(len(fit_frame)),
         data_mode=data_mode,
         input_hashes=dict(input_hashes),
     )
+
+
+def tune_baseline(
+    train_frame: pd.DataFrame,
+    *,
+    data_mode: str,
+    input_hashes: dict[str, str],
+) -> BaselineModel:
+    """Tuning-stage baseline: fit on train only."""
+    return fit_baseline(train_frame, data_mode=data_mode, input_hashes=input_hashes)
+
+
+def refit_baseline(
+    train_validation_frame: pd.DataFrame,
+    *,
+    data_mode: str,
+    input_hashes: dict[str, str],
+) -> BaselineModel:
+    """Final refit: fit on train + validation."""
+    return fit_baseline(train_validation_frame, data_mode=data_mode, input_hashes=input_hashes)
 
 
 def _predict(frame: pd.DataFrame, model: BaselineModel) -> np.ndarray:
@@ -163,4 +192,10 @@ def _predict(frame: pd.DataFrame, model: BaselineModel) -> np.ndarray:
     return prediction
 
 
-__all__ = ["BASELINE_VERSION", "BaselineModel", "fit_baseline"]
+__all__ = [
+    "BASELINE_VERSION",
+    "BaselineModel",
+    "fit_baseline",
+    "refit_baseline",
+    "tune_baseline",
+]

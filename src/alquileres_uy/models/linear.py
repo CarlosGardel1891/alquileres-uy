@@ -1,8 +1,17 @@
 """Ridge regression (the project's regularized linear model).
 
-Grid search over a small, fixed alpha list picking the alpha with the
-lowest validation MAE. The final artifact bundles the ColumnTransformer
-so inference does not need to re-fit anything.
+Two functions:
+
+* :func:`tune_linear` runs the alpha grid on train only, evaluates
+  every candidate on validation, and returns the tuning model (fit on
+  train only) plus the winning alpha.
+* :func:`refit_linear` builds a new pipeline with the tuning alpha and
+  fits it on ``train + validation``.
+
+Both produce a :class:`LinearModel`. The final artifact stored under
+``models/`` and inside the serving bundle is always the refit; the
+tuning model is retained in memory so validation metrics and the
+residual interval stay out-of-sample.
 """
 
 from __future__ import annotations
@@ -28,6 +37,7 @@ class LinearModel:
     feature_names: tuple[str, ...]
     train_row_count: int
     validation_mae_by_alpha: dict[str, float]
+    stage: str  # "tuning" or "final"
     version: str = LINEAR_MODEL_VERSION
 
     def predict(self, frame: pd.DataFrame) -> np.ndarray:
@@ -69,6 +79,7 @@ class LinearModel:
             validation_mae_by_alpha={
                 str(k): float(v) for k, v in metadata["validation_mae_by_alpha"].items()
             },
+            stage=str(metadata.get("stage", "final")),
             version=str(metadata.get("version", LINEAR_MODEL_VERSION)),
         )
 
@@ -78,17 +89,19 @@ class LinearModel:
             "feature_names": list(self.feature_names),
             "train_row_count": self.train_row_count,
             "validation_mae_by_alpha": {str(k): v for k, v in self.validation_mae_by_alpha.items()},
+            "stage": self.stage,
             "version": self.version,
         }
 
 
-def fit_linear(
+def tune_linear(
     train_frame: pd.DataFrame,
     validation_frame: pd.DataFrame,
     *,
     target_column: str,
     alphas: tuple[float, ...],
 ) -> LinearModel:
+    """Tune Ridge alpha on validation. Model is fit on train only."""
     train_features = feature_frame(train_frame)
     validation_features = feature_frame(validation_frame)
     train_target = (
@@ -101,6 +114,7 @@ def fit_linear(
     mae_by_alpha: dict[str, float] = {}
     best_alpha: float | None = None
     best_mae: float = float("inf")
+    best_pipeline: Pipeline | None = None
     for alpha in alphas:
         candidate = Pipeline(
             steps=[
@@ -115,28 +129,51 @@ def fit_linear(
         if mae < best_mae:
             best_mae = mae
             best_alpha = alpha
+            best_pipeline = candidate
 
-    if best_alpha is None:
+    if best_alpha is None or best_pipeline is None:
         raise ValueError("Ridge alpha selection failed — grid was empty")
 
-    # Refit on train + validation with the best alpha.
-    combined_features = pd.concat([train_features, validation_features], ignore_index=True)
-    combined_target = np.concatenate([train_target, validation_target])
+    feature_names = tuple(resolve_feature_names(best_pipeline.named_steps["preprocess"]))
+    return LinearModel(
+        pipeline=best_pipeline,
+        alpha=float(best_alpha),
+        feature_names=feature_names,
+        train_row_count=int(len(train_frame)),
+        validation_mae_by_alpha=mae_by_alpha,
+        stage="tuning",
+    )
+
+
+def refit_linear(
+    train_validation_frame: pd.DataFrame,
+    *,
+    target_column: str,
+    tuning_model: LinearModel,
+) -> LinearModel:
+    """Fit a fresh Ridge pipeline with the tuning alpha on train + validation."""
+    features = feature_frame(train_validation_frame)
+    target = (
+        pd.to_numeric(train_validation_frame[target_column], errors="coerce")
+        .astype(float)
+        .to_numpy()
+    )
     final = Pipeline(
         steps=[
             ("preprocess", build_preprocessor()),
-            ("ridge", Ridge(alpha=best_alpha, random_state=0)),
+            ("ridge", Ridge(alpha=tuning_model.alpha, random_state=0)),
         ]
     )
-    final.fit(combined_features, combined_target)
+    final.fit(features, target)
     feature_names = tuple(resolve_feature_names(final.named_steps["preprocess"]))
     return LinearModel(
         pipeline=final,
-        alpha=float(best_alpha),
+        alpha=tuning_model.alpha,
         feature_names=feature_names,
-        train_row_count=int(len(train_frame) + len(validation_frame)),
-        validation_mae_by_alpha=mae_by_alpha,
+        train_row_count=int(len(train_validation_frame)),
+        validation_mae_by_alpha=dict(tuning_model.validation_mae_by_alpha),
+        stage="final",
     )
 
 
-__all__ = ["LINEAR_MODEL_VERSION", "LinearModel", "fit_linear"]
+__all__ = ["LINEAR_MODEL_VERSION", "LinearModel", "refit_linear", "tune_linear"]
