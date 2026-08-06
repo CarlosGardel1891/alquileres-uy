@@ -50,8 +50,7 @@ def test_create_app_registers_health_and_model_info_routes():
 
 def test_create_app_wires_the_bootstrap_lifespan():
     app = create_app()
-    # FastAPI stores the lifespan on the router; ensure it is the one
-    # we exported (functools.wraps preserves __wrapped__ on the CM).
+    # FastAPI stores the lifespan on the router — ensure it's wired.
     assert app.router.lifespan_context is not None
 
 
@@ -82,15 +81,13 @@ def test_api_settings_env_prefix(monkeypatch):
     assert settings.PORT == 9001
 
 
-def test_get_settings_is_memoized():
-    get_settings.cache_clear()
+def test_get_settings_returns_fresh_instance_each_call():
     first = get_settings()
     second = get_settings()
-    assert first is second
+    assert first is not second
 
 
 def test_get_settings_returns_api_settings_instance():
-    get_settings.cache_clear()
     settings = get_settings()
     assert isinstance(settings, ApiSettings)
 
