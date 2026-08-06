@@ -9,8 +9,8 @@ on:
       - main
 
 jobs:
-  quality:
-    name: Quality checks
+  quality-and-classical:
+    name: Quality + classical models
     runs-on: ubuntu-latest
 
     steps:
@@ -26,6 +26,7 @@ jobs:
             requirements-dev.txt
             requirements-ingest.txt
             requirements-etl.txt
+            requirements-train.txt
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
@@ -39,14 +40,95 @@ jobs:
       - name: Install ETL dependencies
         run: pip install -r requirements-etl.txt
 
+      - name: Install training dependencies
+        run: pip install -r requirements-train.txt
+
       - name: Ruff lint
         run: ruff check .
 
       - name: Ruff format check
         run: ruff format --check .
 
-      - name: Pytest
-        run: pytest -q
+      - name: Pytest (classical, skip torch)
+        run: pytest -q -m "not torch"
 
       - name: Build package
         run: python -m build
+
+      - name: Generate synthetic model fixture
+        run: python scripts/_generate_model_fixture.py
+
+      - name: Smoke — classical training (fixture mode)
+        run: |
+          python scripts/train_models.py \
+            --fixture-mode \
+            --etl-run-dir tests/fixtures/models/etl_run \
+            --output-dir artifacts/ci-classical \
+            --seed 42
+
+      - name: Upload classical training artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-run-classical
+          path: artifacts/ci-classical
+
+  pytorch-cpu:
+    name: PyTorch CPU
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            requirements-ingest.txt
+            requirements-etl.txt
+            requirements-train.txt
+            requirements-torch-cpu.txt
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install development dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Install ingestion dependencies
+        run: pip install -r requirements-ingest.txt
+
+      - name: Install ETL dependencies
+        run: pip install -r requirements-etl.txt
+
+      - name: Install training dependencies
+        run: pip install -r requirements-train.txt
+
+      - name: Install PyTorch CPU wheels
+        run: pip install -r requirements-torch-cpu.txt
+
+      - name: Pytest (torch marker only)
+        run: pytest -q -m torch
+
+      - name: Generate synthetic model fixture
+        run: python scripts/_generate_model_fixture.py
+
+      - name: Smoke — full training with --include-torch
+        run: |
+          python scripts/train_models.py \
+            --fixture-mode \
+            --etl-run-dir tests/fixtures/models/etl_run \
+            --output-dir artifacts/ci-torch \
+            --include-torch \
+            --seed 42
+
+      - name: Upload torch training artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-run-torch
+          path: artifacts/ci-torch

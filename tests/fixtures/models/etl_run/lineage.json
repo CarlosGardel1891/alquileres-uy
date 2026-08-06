@@ -1,0 +1,32 @@
+{
+  "application_version": "0.1.0",
+  "data_mode": "fixture",
+  "etl_run_id": "fixture-model-run-001",
+  "etl_schema_version": "1.0.0",
+  "finished_at": "2026-01-01T00:05:00Z",
+  "input_runs": [
+    {
+      "description_count": 0,
+      "item_batch_count": 0,
+      "run_directory_name": "synthetic",
+      "run_id": "synthetic-run-001",
+      "source": "mercadolibre"
+    }
+  ],
+  "lineage_self_hashed": false,
+  "output_files": {
+    "etl_summary": "etl_summary.json",
+    "model_ready": "model_ready.parquet",
+    "schema": "schema.json"
+  },
+  "output_sha256": {
+    "etl_summary": "ff403b777553f2f6aa966be712dde6eb9c8b5113e5bee027595a7e92e6e24e69",
+    "model_ready": "4d409b868d64513491281833760bc401868ad2430598f2355af9449365d957fe",
+    "schema": "b6f113e6bc76d24ffd4f7d8ebafb8ec7d7ca6576a50ba8b8be64a7ee55c6d877"
+  },
+  "row_counts": {
+    "model_ready": 240
+  },
+  "started_at": "2026-01-01T00:00:00Z",
+  "warning": "FIXTURE DATA \u2014 NOT PROJECT RESULTS"
+}

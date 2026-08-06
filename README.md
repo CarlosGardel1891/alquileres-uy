@@ -276,22 +276,104 @@ Cada corrida ETL escribe:
 - **Próximos pasos posibles:** obtener token oficial de MercadoLibre, priorizar otra fuente, o alcance reducido con `/categories`.
 - **Detalle:** `docs/mercadolibre-source-contract.md`.
 
+## Entrenamiento de modelos (Fase 3)
+
+Estado: **`MODEL_CONTRACT_READY`** (fixture). No existen resultados reales del proyecto — el modo real sigue bloqueado hasta que exista una corrida ETL con `data_mode == "real"` y un `etl_production_approval.json` firmado (`MODEL_PRODUCTION_VALIDATED`).
+
+**Protocolo `tune-then-refit-v2` (sin fuga de validation).**
+
+1. **Tuning** — cada modelo se ajusta únicamente con train; validation
+   se usa solo para elegir alpha (Ridge), grid + best_iteration
+   (LightGBM), early stopping (PyTorch), o simplemente medianas
+   (baseline).
+2. **Validation metrics** — se calculan con los tuning models
+   (out-of-sample por construcción). Son la única entrada a la
+   selección.
+3. **Selección** — `best_overall` por (MAE, MAPE, nombre);
+   `serving_candidate` anclado al menor MAE elegible con desempate por
+   simplicidad dentro de la tolerancia. Nada mira test.
+4. **Final refit** — modelos frescos con la configuración congelada
+   entrenan con `train + validation`. Test nunca se toca.
+5. **Test metrics** — se calculan una única vez con los final models.
+6. **Residual interval** — se calcula sobre validation usando el tuning
+   model del serving candidate.
+7. **Serving bundle** — contiene el final model. El bundle exige exactamente los cinco archivos (`model.joblib`, `metadata.json`, `feature_schema.json`, `residual_interval.json`, `checksums.json`); `checksums.json` cubre exactamente los cuatro payloads; `deployable` debe ser bool real y coherente con `data_mode`.
+8. **`bathrooms` opcional** — helper compartido de imputación: mediana del fit frame cuando hay observaciones; fallback `0.0` cuando la columna está ausente o completamente vacía. Consistente entre clásico y PyTorch, sin mirar validation ni test.
+
+**Cuatro modelos entrenados y comparados**:
+
+1. **baseline** — mediana de precio por m² por (barrio, tipo) con cadena de fallback (barrio → tipo → global);
+2. **linear (Ridge)** — regresión lineal regularizada con grid `alpha ∈ {0.1, 1.0, 10.0}` seleccionado por MAE de validation;
+3. **LightGBM** — grid pequeño y determinista, `n_jobs=1`, `deterministic=True`, early stopping en validation;
+4. **PyTorch** — red tabular CPU con embeddings + MLP, seed fija, `state_dict` (nunca `pickle`).
+
+**Split estrictamente temporal** — agrupado por `date_created`; ningún timestamp cruza splits, ningún `source_item_id` aparece en más de una partición, `max(train) < min(validation) < max(validation) < min(test)`.
+
+**Selección**:
+
+- `best_overall_model`: el candidato con menor MAE de validation entre los cuatro.
+- `serving_candidate`: solo entre baseline/linear/lightgbm (PyTorch excluido por decisión de arquitectura — el bundle futuro de la API no lleva runtime de Torch).
+
+**Comandos** (fixture mode, todo desde `.venv`):
+
+```bash
+# Generar la fixture sintética (240 filas, deterministic con seed fija)
+python scripts/_generate_model_fixture.py
+
+# Dry-run: valida contrato, muestra plan de split, no entrena, no escribe output
+python scripts/train_models.py \
+  --fixture-mode \
+  --etl-run-dir tests/fixtures/models/etl_run \
+  --output-dir /tmp/alquileres-model-dry \
+  --include-torch \
+  --dry-run
+
+# Entrenamiento clásico (baseline + Ridge + LightGBM)
+python scripts/train_models.py \
+  --fixture-mode \
+  --etl-run-dir tests/fixtures/models/etl_run \
+  --output-dir /tmp/alquileres-model-classic \
+  --seed 42
+
+# Entrenamiento completo (agrega PyTorch — requiere requirements-torch-cpu.txt)
+python scripts/train_models.py \
+  --fixture-mode \
+  --etl-run-dir tests/fixtures/models/etl_run \
+  --output-dir /tmp/alquileres-model-all \
+  --include-torch \
+  --seed 42
+```
+
+**Salidas por corrida**: `metrics.json`, `model_selection.json`,
+`dataset_profile.json`, `split_manifest.json`, `reproducibility.json`,
+`training_summary.json`, `training_lineage.json`, `predictions.parquet`,
+`worst_errors.csv`, `error_analysis.json`, `models/{baseline.json,
+linear.joblib, lightgbm.joblib, torch/}`, `plots/*.png`,
+`serving_bundle/*`.
+
+**Real mode gate**: sin `--fixture-mode`, la CLI exige `--etl-approval
+etl_production_approval.json`. Sin approval → exit 2, sin output, sin
+entrenamiento, sin importar PyTorch. Un approval fixture o hashes
+distintos también rechazan. Ejemplo (inválido a propósito): `config/etl_production_approval.example.json`.
+
+**Documentación**: `docs/model-training-contract.md`,
+`docs/model-artifact-contract.md`, `experiments.md`.
+
 ## Fases del proyecto
 
-- **Fase 0 — Bootstrap técnico (en curso):** estructura del repositorio, empaquetado, Ruff, Pytest, pre-commit, CI y documentación de decisiones.
-- **Fase 1 — Ingesta:** obtención sistemática de publicaciones de alquiler.
-- **Fase 2 — ETL y normalización:** limpieza, deduplicación y unificación de esquemas.
-- **Fase 3 — Features:** enriquecimiento geográfico y de contexto.
-- **Fase 4 — Modelado:** comparación de baseline, regresión lineal, LightGBM y red neuronal PyTorch.
-- **Fase 5 — Servicio:** API de inferencia y despliegue de solo lectura.
-- **Fase 6 — Interfaz:** frontend público de consulta.
+- **Fase 0 — Bootstrap técnico:** ✅ completada.
+- **Fase 1 — Ingesta:** bloqueada por source gate (ver arriba).
+- **Fase 2 — ETL y normalización:** ✅ `ETL_CONTRACT_READY`.
+- **Fase 3 — Entrenamiento de modelos:** ✅ `MODEL_CONTRACT_READY` (fixture). Falta `MODEL_PRODUCTION_VALIDATED`.
+- **Fase 4 — Servicio:** API de inferencia y despliegue de solo lectura.
+- **Fase 5 — Interfaz:** frontend público de consulta.
 
 ## Estado actual
 
 Todavía no existe:
 
-- un modelo entrenado;
-- métricas de evaluación;
+- una corrida ETL real aprobada;
+- métricas del proyecto sobre datos reales (las de `experiments.md` son fixture);
 - una demo desplegada;
 - una API pública.
 

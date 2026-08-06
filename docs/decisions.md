@@ -336,3 +336,72 @@ Motivación:
 - Permite reconstruir, para cada publicación, en qué segmento (barrio, precio, dormitorios) fue encontrada por primera vez. Es información imprescindible para diagnosticar la cobertura del plan.
 - Sin esta trazabilidad, dos plans distintos pueden producir el mismo inventario final sin que se pueda auditar cuál segmento aportó qué.
 - Deja `run_items.query_id` **no nulo** para todo ítem descargado correctamente, lo que simplifica los joins de análisis.
+
+
+## Fase 3 — Entrenamiento de modelos
+
+Estas decisiones enmarcan el pipeline de entrenamiento (`src/alquileres_uy/models/`).
+
+### Ridge como modelo lineal
+
+El "modelo lineal interpretable" del proyecto es Ridge (`sklearn.linear_model.Ridge`) con grid `alpha ∈ {0.1, 1.0, 10.0}` seleccionado por MAE de validation. Regresión sin regularización es inestable ante one-hot encoding con barrios raros; Ridge da coeficientes acotados sin destruir la interpretabilidad.
+
+### Split temporal (sin shuffle)
+
+Se usa un split temporal agrupado por `date_created` (`temporal-grouped-v1`). No se usa `train_test_split` ni ningún split aleatorio: el sistema debe entrenar con el pasado y validarse con el futuro, y filas con el mismo timestamp nunca cruzan splits. Un split que no cumpla las invariantes falla explícitamente; no hay degradación silenciosa.
+
+### PyTorch en CPU y separado del serving
+
+PyTorch participa en la comparación de métricas pero **no** entra al `serving_bundle/`. Motivo: el bundle futuro de FastAPI (Fase 4) no llevará runtime de Torch — pesa demás y el modelo tabular no gana lo suficiente sobre LightGBM en el fixture actual para justificarlo. `requirements-torch-cpu.txt` se instala solo cuando se pide `--include-torch`; la falta de la wheel devuelve exit 2 con mensaje claro.
+
+### LightGBM como candidato esperado, no garantizado
+
+LightGBM suele quedar por encima del baseline y del linear en el fixture, pero el pipeline no lo asume: el `serving_candidate` se elige por validation MAE (con preferencia por el modelo más simple ante empate práctico dentro de `SERVING_TIE_TOLERANCE = 5 USD`). Cualquiera de baseline/linear/lightgbm puede ganar según la corrida.
+
+### Best-overall vs. serving-candidate
+
+Se separan dos decisiones:
+
+- `best_overall_model` puede ser cualquiera de los cuatro (baseline / linear / lightgbm / torch).
+- `serving_candidate` solo puede ser clásico. Esto deja constancia de que Torch puede ganar en métricas sin obligar a servirlo, y evita mezclar "el mejor modelo" con "el modelo que se despliega".
+
+### Intervalo de predicción empírico (no CI estadístico)
+
+La API futura devolverá `[lower, upper]` alrededor de la predicción. Se calcula sobre los residuos de validation del `serving_candidate` (q10/q90). Es explícitamente etiquetado como `empirical residual interval` — no se afirma que sea un intervalo de confianza estadístico formal.
+
+### Sin MLflow ni Optuna
+
+Alcance conscientemente reducido: grids pequeños y fijos, resultados serializados como JSON/Parquet. MLflow y Optuna aportan valor cuando hay decenas de experimentos concurrentes; con cuatro familias y un puñado de hiperparámetros el overhead operativo no se justifica todavía.
+
+### PyTorch fuera de la API
+
+El serving bundle refuerza la exclusión: `build_serving_bundle` levanta `ServingBundleError` si se le pide empaquetar Torch; `metadata.json` deja constancia con `eligible_for_api_serving=false` en el side-car del modelo Torch.
+
+### Correcciones review Fase 3 (tune-then-refit-v2)
+
+El protocolo original re-entrenaba Ridge y LightGBM con `train + validation` y luego calculaba validation metrics con ese modelo — fuga silenciosa. La revisión introdujo:
+
+- separación explícita entre `tune_*` (train-only) y `refit_*` (`train + validation`);
+- validation metrics y residual interval calculados con el tuning model;
+- test metrics calculadas una única vez con el final model;
+- selección anclada al menor MAE elegible (no encadenada);
+- `training_run_id` distinto de `etl_run_id`;
+- `training_config.json` hasheado dentro del lineage;
+- `load_serving_bundle` ejecuta `validate_runtime_compatibility` **antes** de `joblib.load` (tests con `joblib.load` monkey-patched aseguran call-count 0);
+- `source_item_id` exige instancia de `str`; barrio no vacío; bedrooms finito; bathrooms opcional en Parquet con imputación por mediana (ni el DataFrame ni el Parquet se modifican);
+- `residual = actual - predicted` en `predictions.parquet` (incluye train / validation / test con columna `model_stage`);
+- worst_errors del serving candidate en test/final_refit.
+
+Motivación: las métricas fixture anteriores eran inválidas (LightGBM caía de 38.78 → 80.23 en validation al eliminar el leak). El pipeline honesto no admite atajos.
+
+
+## Correcciones finales del review Fase 3
+
+Cambios mínimos aplicados sobre `tune-then-refit-v2`:
+
+- **Cobertura exacta del serving bundle**: `REQUIRED_BUNDLE_PAYLOAD_FILES` y `REQUIRED_BUNDLE_FILES` son la única fuente. `checksums.json` debe declarar los cuatro payloads exactamente; el directorio debe contener sólo los cinco archivos. Subdirs, symlinks y extras se rechazan antes de leer metadata. `build_serving_bundle` construye `checksums.json` desde la constante — no enumera el directorio.
+- **Consistencia `data_mode` / `deployable`**: `deployable` debe ser bool real (no `0`, `1`, `"true"`, null) y estrictamente igual a `data_mode == "real"`. Incoherencias (`fixture + true`, `real + false`) se rechazan.
+- **Bathrooms opcional con fallback 0.0**: helper `resolve_numeric_imputation_values` compartido entre clásico y PyTorch. Mediana cuando hay observaciones; `0.0` cuando el fit frame no tiene ninguna. Clásico usa `SimpleImputer(keep_empty_features=True)`. Torch registra `imputation_sources` en `vocabularies.json` / `numeric_scaler.json`.
+- **Test perturbation con Torch**: nuevo test marcado `@pytest.mark.torch` que usa los IDs reales de test extraídos del `predictions.parquet` (no un índice aproximado). Verifica que validation MAE, best_epoch, hiperparámetros, selection y residual interval permanecen idénticos.
+- **Real-mode ephemeral test**: `test_real_mode_lineage_contains_exact_approval_hash` promueve la fixture a real bajo `tmp_path`, genera un approval sintético con hashes reales, corre el pipeline y verifica que `inputs_sha256["etl_approval"]` coincide con `sha256(approval_path.read_bytes())`. Nunca versiona un approval real.
+- **Runtime mismatches**: cobertura parametrizada de NumPy, pandas, scikit-learn y joblib más dos casos específicos para LightGBM (versión ausente y runtime ausente). Todos monkeypatchean `joblib.load` y assertean call-count 0.
