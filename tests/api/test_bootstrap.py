@@ -95,7 +95,7 @@ def test_get_settings_returns_api_settings_instance():
 # ---- lifespan ------------------------------------------------------
 
 
-def test_lifespan_startup_and_shutdown_do_not_raise():
+def test_lifespan_startup_and_shutdown_do_not_raise(api_env):
     app = FastAPI()
 
     async def _enter_exit() -> str:
@@ -113,7 +113,7 @@ def test_lifespan_is_an_async_context_manager():
     assert hasattr(cm, "__aexit__")
 
 
-def test_lifespan_yields_none():
+def test_lifespan_yields_none(api_env):
     app = FastAPI()
 
     async def _peek():
@@ -167,8 +167,8 @@ def test_created_app_model_info_route_is_reachable_via_router():
     assert len(matches) == 1
 
 
-def test_created_app_lifespan_executes_end_to_end():
-    """The lifespan runs cleanly when the app is entered — no side effects."""
+def test_created_app_lifespan_executes_end_to_end(api_env):
+    """The lifespan runs cleanly when the app is entered — model loads OK."""
     app = create_app()
 
     @asynccontextmanager
@@ -178,6 +178,6 @@ def test_created_app_lifespan_executes_end_to_end():
 
     async def _cycle():
         async with _enter():
-            return True
+            return app.state.predictor is not None and app.state.loaded_model is not None
 
     assert _run(_cycle()) is True
