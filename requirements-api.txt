@@ -1,6 +1,13 @@
-# Fase 4 API bootstrap — pinned so the base is reproducible.
-# Python 3.12. No model, no joblib, no numpy at this stage.
+# Fase 5 — first functional prediction API. Pinned pandas/sklearn/joblib/
+# lightgbm to match the training requirements so serving bundles pass
+# validate_runtime_compatibility. Numpy is a transitive requirement of
+# pandas + sklearn; pin it to the same version training used.
 fastapi==0.115.6
 uvicorn==0.34.0
 jinja2==3.1.5
 pydantic-settings==2.7.1
+numpy==2.2.1
+pandas==2.2.3
+scikit-learn==1.6.0
+joblib==1.4.2
+lightgbm==4.5.0
