@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from .dependencies import get_settings
 from .lifespan import lifespan
-from .routes import health, model_info
+from .routes import health, model_info, predict
 
 
 def create_app() -> FastAPI:
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(model_info.router)
+    app.include_router(predict.router)
     return app
 
 
