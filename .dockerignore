@@ -1,0 +1,47 @@
+# Keep the build context small so builds are fast and reproducible.
+.git
+.github
+.venv
+venv
+env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+coverage.xml
+build
+dist
+*.egg-info
+
+# Source data / raw runs never enter the image.
+data/
+tests/fixtures/etl_agg_tmp/
+tests/fixtures/ingest_integration_*/
+tests/fixtures/etl_broken_*/
+tests/fixtures/etl_wrong_hash_*/
+tests/fixtures/etl_bad_unit_*/
+tests/fixtures/models/tmp_*/
+
+# Local artifacts other than the one we intentionally COPY.
+artifacts/ci-*/
+artifacts/models/**/*.tmp
+
+# Editor / OS noise.
+.vscode
+.idea
+.claude
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+
+# Notebooks and prompt drafts stay out of images.
+notebooks/
+.ipynb_checkpoints/
+prompt.txt

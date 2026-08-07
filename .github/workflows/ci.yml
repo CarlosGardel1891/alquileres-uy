@@ -140,3 +140,29 @@ jobs:
         with:
           name: training-run-torch
           path: artifacts/ci-torch
+
+  docker-build:
+    name: Docker image build (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare an empty serving-bundle placeholder
+        run: |
+          mkdir -p artifacts/models/.placeholder
+          echo "The real bundle is copied at deploy time via a volume mount." \
+            > artifacts/models/.placeholder/README.txt
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (do not push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: alquileres-uy-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
