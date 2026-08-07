@@ -30,6 +30,11 @@ class ApiSettings(BaseSettings):
     # never enable it.
     ALLOW_FIXTURE_MODEL: bool = False
 
+    # Runtime knobs consumed by scripts/run_api.py (uvicorn) so ops
+    # can tune the deployment via environment variables only.
+    REQUEST_TIMEOUT: int = 30  # seconds; passed to uvicorn --timeout-keep-alive
+    MAX_WORKERS: int = 1  # single-process default; scale horizontally
+
     model_config = SettingsConfigDict(
         env_prefix="ALQUILERES_API_",
         env_file=None,
