@@ -1,11 +1,13 @@
 """API configuration settings.
 
-Only runtime-facing knobs at this stage. No model-related fields on
-purpose — those arrive in a later subphase along with the serving
-bundle loader.
+Runtime-facing knobs plus the location of the serving bundle the API
+should expose. The bundle is loaded once at startup; the actual file
+IO lives in :mod:`alquileres_uy.api.services.model_loader`.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -19,6 +21,14 @@ class ApiSettings(BaseSettings):
     PORT: int = 8000
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+
+    # Location of the trained serving bundle produced by Fase 3
+    # (scripts/train_models.py → <output-dir>/<ts>_<id>/serving_bundle/).
+    MODEL_BUNDLE_PATH: Path = Path("artifacts/models/latest/serving_bundle")
+    # Fixture bundles carry `deployable: false` by contract. Dev / test
+    # setups can flip this to True to consume them; production must
+    # never enable it.
+    ALLOW_FIXTURE_MODEL: bool = False
 
     model_config = SettingsConfigDict(
         env_prefix="ALQUILERES_API_",
