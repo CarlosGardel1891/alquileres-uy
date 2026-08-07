@@ -359,13 +359,33 @@ distintos también rechazan. Ejemplo (inválido a propósito): `config/etl_produ
 **Documentación**: `docs/model-training-contract.md`,
 `docs/model-artifact-contract.md`, `experiments.md`.
 
+## Fase 4 — Prediction API
+
+Estado: **bootstrap de infraestructura únicamente**. La API todavía **no** realiza inferencia, **no** carga modelos, **no** abre archivos y **no** expone `/predict`. Sólo existe la base sobre la que se construirán las subfases posteriores.
+
+Endpoints disponibles en este bootstrap:
+
+- `GET /health` → `{"status": "ok"}`;
+- `GET /model-info` → HTTP `501 Not Implemented` (contrato reservado para la subfase de serving).
+
+Cómo levantar la API en local (dev):
+
+```bash
+pip install -r requirements-api.txt
+python scripts/run_api.py
+```
+
+Configuración vía variables de entorno con prefijo `ALQUILERES_API_` (`APP_NAME`, `APP_VERSION`, `HOST`, `PORT`, `DEBUG`, `LOG_LEVEL`).
+
+Fuera de alcance en esta fase: `/predict`, loaders, serving bundle, LightGBM/PyTorch en runtime, Docker, deploy, templates funcionales, middleware, autenticación, CORS.
+
 ## Fases del proyecto
 
 - **Fase 0 — Bootstrap técnico:** ✅ completada.
 - **Fase 1 — Ingesta:** bloqueada por source gate (ver arriba).
 - **Fase 2 — ETL y normalización:** ✅ `ETL_CONTRACT_READY`.
 - **Fase 3 — Entrenamiento de modelos:** ✅ `MODEL_CONTRACT_READY` (fixture). Falta `MODEL_PRODUCTION_VALIDATED`.
-- **Fase 4 — Servicio:** API de inferencia y despliegue de solo lectura.
+- **Fase 4 — Servicio:** bootstrap de la API listo (`GET /health`, `/model-info → 501`); inferencia + `/predict` + serving pendientes.
 - **Fase 5 — Interfaz:** frontend público de consulta.
 
 ## Estado actual
