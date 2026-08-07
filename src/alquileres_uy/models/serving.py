@@ -171,6 +171,10 @@ def build_serving_bundle(
         "input_hashes": dict(input_hashes),
         "versions": _model_versions(model_name),
         "model_artifact_sha256": sha256_file(model_path),
+        # Minimum API version required to serve this bundle. Bumped
+        # whenever the API's contract with the bundle changes in a
+        # backwards-incompatible way.
+        "minimum_api_version": "0.1.0",
     }
     write_json(directory / "metadata.json", metadata)
     write_json(directory / "feature_schema.json", build_feature_schema())
