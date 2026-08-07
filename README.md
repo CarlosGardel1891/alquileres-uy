@@ -363,10 +363,16 @@ distintos también rechazan. Ejemplo (inválido a propósito): `config/etl_produ
 
 Estado: **bootstrap de infraestructura únicamente**. La API todavía **no** realiza inferencia, **no** carga modelos, **no** abre archivos y **no** expone `/predict`. Sólo existe la base sobre la que se construirán las subfases posteriores.
 
-Endpoints disponibles en este bootstrap:
+Endpoints:
 
 - `GET /health` → `{"status": "ok"}`;
 - `GET /model-info` → HTTP `501 Not Implemented` (contrato reservado para la subfase de serving).
+- `POST /predict` → recibe un payload con los campos `property_type`, `price`, `bedrooms`, `bathrooms`, `covered_area`, `total_area`, `latitude`, `longitude`, `neighborhood` y devuelve `{prediction, currency, model_version, prediction_timestamp}`. La API carga el serving bundle al startup — sin bundle válido no arranca.
+
+Configuración adicional (Fase 5):
+
+- `ALQUILERES_API_MODEL_BUNDLE_PATH` (default `artifacts/models/latest/serving_bundle`) — path al `serving_bundle/` producido por `scripts/train_models.py`.
+- `ALQUILERES_API_ALLOW_FIXTURE_MODEL` (default `false`) — habilitar sólo en dev/test para consumir el bundle fixture (que lleva `deployable: false`).
 
 Cómo levantar la API en local (dev):
 
@@ -377,7 +383,7 @@ python scripts/run_api.py
 
 Configuración vía variables de entorno con prefijo `ALQUILERES_API_` (`APP_NAME`, `APP_VERSION`, `HOST`, `PORT`, `DEBUG`, `LOG_LEVEL`).
 
-Fuera de alcance en esta fase: `/predict`, loaders, serving bundle, LightGBM/PyTorch en runtime, Docker, deploy, templates funcionales, middleware, autenticación, CORS.
+Fuera de alcance en esta fase: autenticación, frontend, base de datos, Docker, deploy, observabilidad avanzada, templates funcionales, middleware, CORS.
 
 ## Fases del proyecto
 
