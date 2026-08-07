@@ -27,6 +27,7 @@ jobs:
             requirements-ingest.txt
             requirements-etl.txt
             requirements-train.txt
+            requirements-api.txt
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
@@ -42,6 +43,9 @@ jobs:
 
       - name: Install training dependencies
         run: pip install -r requirements-train.txt
+
+      - name: Install API dependencies
+        run: pip install -r requirements-api.txt
 
       - name: Ruff lint
         run: ruff check .
@@ -91,6 +95,7 @@ jobs:
             requirements-ingest.txt
             requirements-etl.txt
             requirements-train.txt
+            requirements-api.txt
             requirements-torch-cpu.txt
 
       - name: Upgrade pip
@@ -107,6 +112,9 @@ jobs:
 
       - name: Install training dependencies
         run: pip install -r requirements-train.txt
+
+      - name: Install API dependencies
+        run: pip install -r requirements-api.txt
 
       - name: Install PyTorch CPU wheels
         run: pip install -r requirements-torch-cpu.txt
