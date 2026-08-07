@@ -270,13 +270,16 @@ def test_predict_response_serializes_from_prediction_result():
 
 
 def test_predict_route_returns_response_for_valid_payload(prediction_bundle):
+    from alquileres_uy.api.prediction_service import PredictionService
+
     loaded = ModelLoader(bundle_path=prediction_bundle, allow_fixture=True).load()
     predictor = Predictor(model=loaded)
+    service = PredictionService(predictor=predictor, max_concurrent=4, timeout_seconds=10.0)
 
     async def _call():
         return await predict_route.predict(
             payload=PredictRequest(**_valid_payload()),
-            predictor=predictor,
+            service=service,
         )
 
     response = _run(_call())
@@ -287,6 +290,8 @@ def test_predict_route_returns_response_for_valid_payload(prediction_bundle):
 
 
 def test_predict_route_raises_500_when_predictor_fails():
+    from alquileres_uy.api.prediction_service import PredictionService
+
     class _Explodes:
         def predict(self, frame):
             raise RuntimeError("boom")
@@ -298,11 +303,12 @@ def test_predict_route_raises_500_when_predictor_fails():
         feature_order=("neighborhood_normalized", "property_type"),
     )
     predictor = Predictor(model=loaded)
+    service = PredictionService(predictor=predictor, max_concurrent=4, timeout_seconds=10.0)
 
     async def _call():
         return await predict_route.predict(
             payload=PredictRequest(**_valid_payload()),
-            predictor=predictor,
+            service=service,
         )
 
     with pytest.raises(HTTPException) as info:
