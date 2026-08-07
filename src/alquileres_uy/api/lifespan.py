@@ -18,6 +18,7 @@ from fastapi import FastAPI
 
 from .dependencies import get_settings
 from .logging_config import configure_logging, get_logger
+from .metrics import set_model_loaded
 from .services.model_loader import ModelLoader, ModelUnavailableError
 from .services.predictor import Predictor
 
@@ -36,6 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         loaded = loader.load()
     except ModelUnavailableError:
+        set_model_loaded(False)
         logger.exception("api startup: model rejected")
         raise
     logger.info(
@@ -45,11 +47,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.loaded_model = loaded
     app.state.predictor = Predictor(model=loaded)
+    set_model_loaded(True)
     try:
         yield
     finally:
         app.state.loaded_model = None
         app.state.predictor = None
+        set_model_loaded(False)
         logger.info("api shutdown")
 
 
