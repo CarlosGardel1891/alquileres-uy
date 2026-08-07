@@ -1,9 +1,7 @@
 """Run the prediction API with uvicorn.
 
-At this stage the script only wires ``uvicorn`` to
-``alquileres_uy.api.app:create_app``. No workers, no reload logic, no
-gunicorn. Additional runtime knobs will be introduced in later
-subphases together with the model loader.
+Every runtime knob is read from :class:`ApiSettings` (env-driven) so
+the container can be tuned without editing code.
 """
 
 from __future__ import annotations
@@ -21,6 +19,8 @@ def main() -> None:
         host=settings.HOST,
         port=settings.PORT,
         log_level=settings.LOG_LEVEL.lower(),
+        workers=settings.MAX_WORKERS,
+        timeout_keep_alive=settings.REQUEST_TIMEOUT,
     )
 
 
