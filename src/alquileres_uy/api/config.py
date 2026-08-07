@@ -35,6 +35,11 @@ class ApiSettings(BaseSettings):
     REQUEST_TIMEOUT: int = 30  # seconds; passed to uvicorn --timeout-keep-alive
     MAX_WORKERS: int = 1  # single-process default; scale horizontally
 
+    # Prometheus observability. Enabled by default; disabling turns the
+    # metrics middleware into a no-op and hides the /metrics endpoint.
+    ENABLE_METRICS: bool = True
+    METRICS_PATH: str = "/metrics"
+
     model_config = SettingsConfigDict(
         env_prefix="ALQUILERES_API_",
         env_file=None,
