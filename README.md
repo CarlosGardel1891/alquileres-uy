@@ -365,14 +365,39 @@ Estado: **bootstrap de infraestructura únicamente**. La API todavía **no** rea
 
 Endpoints:
 
-- `GET /health` → `{"status": "ok"}`;
-- `GET /model-info` → HTTP `501 Not Implemented` (contrato reservado para la subfase de serving).
+- `GET /health` → `{"status": "ok"}` — probe estático, no depende del modelo.
+- `GET /ready` → `{"status":"ready"}` HTTP 200 cuando el bundle está cargado y el `predict` responde; HTTP 503 `{"status":"not_ready"}` si algo falta.
+- `GET /version` → devuelve `api_version`, `model_version`, `model_type`, `trained_at`, `bundle_sha256` del bundle cargado (nunca reconstruye estos valores).
+- `GET /model-info` → HTTP `501 Not Implemented` (contrato reservado).
 - `POST /predict` → recibe un payload con los campos `property_type`, `price`, `bedrooms`, `bathrooms`, `covered_area`, `total_area`, `latitude`, `longitude`, `neighborhood` y devuelve `{prediction, currency, model_version, prediction_timestamp}`. La API carga el serving bundle al startup — sin bundle válido no arranca.
 
-Configuración adicional (Fase 5):
+**Infraestructura de producción (Fase 7)**:
 
-- `ALQUILERES_API_MODEL_BUNDLE_PATH` (default `artifacts/models/latest/serving_bundle`) — path al `serving_bundle/` producido por `scripts/train_models.py`.
-- `ALQUILERES_API_ALLOW_FIXTURE_MODEL` (default `false`) — habilitar sólo en dev/test para consumir el bundle fixture (que lleva `deployable: false`).
+- Middleware `RequestIdMiddleware` — cada request gana / mantiene el header `X-Request-ID`; el id viaja por un `ContextVar` para logs y se echoa en toda respuesta (incluso las de error).
+- Logging estructurado (`alquileres_uy.api` logger) — línea única con `timestamp | level | name | request_id=... | message`. Nunca registra latitud, longitud, precio ni payload completo. Solo emite: `request_id`, `model`, `duration_ms`, `result`.
+- Handlers globales para `RequestValidationError` / `ValidationError` / `HTTPException` / `Exception` que devuelven `{"error":{"code":"...","message":"..."}}` sin tracebacks.
+- POST `/predict` instrumentado con timing (`duration_ms`) y logs de éxito / fallo.
+
+Configuración:
+
+- `ALQUILERES_API_HOST` (default `127.0.0.1`), `ALQUILERES_API_PORT` (default `8000`).
+- `ALQUILERES_API_LOG_LEVEL` (default `INFO`).
+- `ALQUILERES_API_REQUEST_TIMEOUT` (default `30` s) — `uvicorn --timeout-keep-alive`.
+- `ALQUILERES_API_MAX_WORKERS` (default `1`).
+- `ALQUILERES_API_MODEL_BUNDLE_PATH` (default `artifacts/models/latest/serving_bundle`).
+- `ALQUILERES_API_ALLOW_FIXTURE_MODEL` (default `false`) — dev/test only.
+
+**Docker**:
+
+`Dockerfile` (Python 3.12 slim, uvicorn) + `.dockerignore`. El CI job `docker-build` construye la imagen (no publica).
+
+```bash
+docker build -t alquileres-uy-api .
+docker run -p 8000:8000 \
+  -e ALQUILERES_API_MODEL_BUNDLE_PATH=/app/artifacts/serving_bundle \
+  -v /path/al/serving_bundle:/app/artifacts/serving_bundle:ro \
+  alquileres-uy-api
+```
 
 Cómo levantar la API en local (dev):
 
