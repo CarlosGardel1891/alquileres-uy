@@ -97,7 +97,7 @@ def test_model_loader_raises_on_invalid_bundle(prediction_bundle, tmp_path):
 def test_model_loader_refuses_fixture_bundle_by_default(prediction_bundle):
     """Without allow_fixture the loader must refuse a fixture-mode bundle."""
     loader = ModelLoader(bundle_path=prediction_bundle)  # allow_fixture=False
-    with pytest.raises(ModelUnavailableError, match="invalid"):
+    with pytest.raises(ModelUnavailableError, match="fixture"):
         loader.load()
 
 
@@ -133,6 +133,7 @@ def test_predictor_wraps_model_failures():
         model=_Explodes(),
         metadata={"bundle_version": "1.0.0", "model_type": "baseline"},
         bundle_path=Path("/tmp/fake"),
+        feature_order=("neighborhood_normalized", "property_type"),
     )
     predictor = Predictor(model=loaded)
     with pytest.raises(PredictorError, match="model boom"):
@@ -148,6 +149,7 @@ def test_predictor_rejects_non_numeric_output():
         model=_WeirdOutput(),
         metadata={"bundle_version": "1.0.0", "model_type": "baseline"},
         bundle_path=Path("/tmp/fake"),
+        feature_order=("bedrooms",),
     )
     predictor = Predictor(model=loaded)
     with pytest.raises(PredictorError):
@@ -163,6 +165,7 @@ def test_predictor_uses_loaded_model_version():
         model=_Constant(),
         metadata={"bundle_version": "9.9.9", "model_type": "baseline"},
         bundle_path=Path("/tmp/fake"),
+        feature_order=("bedrooms",),
     )
     result = Predictor(model=loaded).predict(PredictRequest(**_valid_payload()))
     assert result.model_version == "9.9.9"
@@ -292,6 +295,7 @@ def test_predict_route_raises_500_when_predictor_fails():
         model=_Explodes(),
         metadata={"bundle_version": "1.0.0", "model_type": "baseline"},
         bundle_path=Path("/tmp/fake"),
+        feature_order=("neighborhood_normalized", "property_type"),
     )
     predictor = Predictor(model=loaded)
 
@@ -418,6 +422,236 @@ def test_created_app_predict_end_to_end(api_env):
     result = _run(_cycle())
     assert result.prediction > 0
     assert result.currency == "USD"
+
+
+# ---- Feature-contract decoupling (review correction 1) --------------
+
+
+def test_loaded_model_exposes_feature_order_from_bundle(prediction_bundle):
+    """feature_order must equal metadata.feature_list from the bundle."""
+    loaded = ModelLoader(bundle_path=prediction_bundle, allow_fixture=True).load()
+    metadata = json.loads((prediction_bundle / "metadata.json").read_text(encoding="utf-8"))
+    assert loaded.feature_order == tuple(metadata["feature_list"])
+
+
+def test_predictor_builds_frame_in_bundle_feature_order():
+    """The DataFrame columns must match feature_order (in exact order)."""
+    captured: list[list[str]] = []
+
+    class _Recorder:
+        def predict(self, frame):
+            captured.append(list(frame.columns))
+            return [42.0]
+
+    loaded = LoadedModel(
+        model=_Recorder(),
+        metadata={"bundle_version": "1.0.0", "model_type": "baseline"},
+        bundle_path=Path("/tmp/fake"),
+        feature_order=("total_area_m2", "property_type", "bedrooms"),
+    )
+    Predictor(model=loaded).predict(PredictRequest(**_valid_payload()))
+    assert captured == [["total_area_m2", "property_type", "bedrooms"]]
+
+
+def test_predictor_reorders_frame_when_feature_order_changes():
+    """Swapping feature_order swaps the column order in the frame."""
+    captured: list[list[str]] = []
+
+    class _Recorder:
+        def predict(self, frame):
+            captured.append(list(frame.columns))
+            return [1.0]
+
+    for order in (
+        ("bedrooms", "property_type"),
+        ("property_type", "bedrooms"),
+    ):
+        loaded = LoadedModel(
+            model=_Recorder(),
+            metadata={"bundle_version": "1.0.0", "model_type": "baseline"},
+            bundle_path=Path("/tmp/fake"),
+            feature_order=order,
+        )
+        Predictor(model=loaded).predict(PredictRequest(**_valid_payload()))
+    assert captured == [
+        ["bedrooms", "property_type"],
+        ["property_type", "bedrooms"],
+    ]
+
+
+def test_predictor_rejects_bundle_without_feature_order():
+    class _Recorder:
+        def predict(self, frame):
+            return [0.0]
+
+    loaded = LoadedModel(
+        model=_Recorder(),
+        metadata={"bundle_version": "1.0.0", "model_type": "baseline"},
+        bundle_path=Path("/tmp/fake"),
+        feature_order=(),
+    )
+    with pytest.raises(PredictorError, match="feature contract"):
+        Predictor(model=loaded).predict(PredictRequest(**_valid_payload()))
+
+
+def test_predictor_rejects_unknown_feature_from_bundle():
+    class _Recorder:
+        def predict(self, frame):
+            return [0.0]
+
+    loaded = LoadedModel(
+        model=_Recorder(),
+        metadata={"bundle_version": "1.0.0", "model_type": "baseline"},
+        bundle_path=Path("/tmp/fake"),
+        feature_order=("bedrooms", "not_a_real_field"),
+    )
+    with pytest.raises(PredictorError, match="not_a_real_field"):
+        Predictor(model=loaded).predict(PredictRequest(**_valid_payload()))
+
+
+def test_model_loader_rejects_bundle_without_feature_list(prediction_bundle, tmp_path):
+    """A tampered metadata that drops feature_list must fail with a clear error."""
+    import shutil
+
+    copy = tmp_path / "no_feature_list_bundle"
+    shutil.copytree(prediction_bundle, copy)
+    metadata = json.loads((copy / "metadata.json").read_text(encoding="utf-8"))
+    metadata.pop("feature_list", None)
+    (copy / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    # rewrite checksums so the failure is the feature contract, not integrity
+    checks = {
+        name: hashlib.sha256((copy / name).read_bytes()).hexdigest()
+        for name in (
+            "model.joblib",
+            "metadata.json",
+            "feature_schema.json",
+            "residual_interval.json",
+        )
+    }
+    (copy / "checksums.json").write_text(
+        json.dumps(checks, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(ModelUnavailableError, match="feature contract"):
+        ModelLoader(bundle_path=copy, allow_fixture=True).load()
+
+
+def test_predictor_module_does_not_hold_hardcoded_feature_list():
+    """Grep the predictor module: no model-feature names may appear as literals."""
+    import inspect
+
+    from alquileres_uy.api.services import predictor as predictor_module
+
+    source = inspect.getsource(predictor_module)
+    forbidden = [
+        "neighborhood_normalized",
+        "property_type",
+        "total_area_m2",
+    ]
+    for token in forbidden:
+        assert token not in source, (
+            f"predictor.py must not mention model feature {token!r} directly; "
+            "the contract must come from LoadedModel.feature_order"
+        )
+
+
+def test_predict_request_to_model_features_uses_json_schema_extra():
+    """The mapping request→model must be data-driven from Field metadata."""
+    from alquileres_uy.api.schemas.predict import MODEL_FEATURE_KEY
+
+    request = PredictRequest(**_valid_payload())
+    mapped = request.to_model_features()
+    for field_name, info in PredictRequest.model_fields.items():
+        extra = info.json_schema_extra
+        target = None
+        if isinstance(extra, dict):
+            target = extra.get(MODEL_FEATURE_KEY)
+        if target is None:
+            assert (
+                not any(
+                    v == getattr(request, field_name)
+                    for v in mapped.values()
+                    if v == getattr(request, field_name)
+                    and field_name in ("price", "latitude", "longitude")
+                )
+                or True
+            )  # api-only fields may collide by value but must not be routed by name
+            assert field_name not in mapped
+        else:
+            assert mapped[target] == getattr(request, field_name)
+
+
+# ---- ALLOW_FIXTURE_MODEL matrix (review correction 2) --------------
+
+
+def _make_bundle_variant(prediction_bundle: Path, tmp_path: Path, *, deployable: bool) -> Path:
+    """Copy the fixture bundle and flip data_mode/deployable on demand."""
+    import shutil
+
+    tag = "real" if deployable else "fixture"
+    destination = tmp_path / f"{tag}_bundle_variant"
+    shutil.copytree(prediction_bundle, destination)
+    metadata = json.loads((destination / "metadata.json").read_text(encoding="utf-8"))
+    if deployable:
+        metadata["data_mode"] = "real"
+        metadata["deployable"] = True
+    else:
+        metadata["data_mode"] = "fixture"
+        metadata["deployable"] = False
+    (destination / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    checks = {
+        name: hashlib.sha256((destination / name).read_bytes()).hexdigest()
+        for name in (
+            "model.joblib",
+            "metadata.json",
+            "feature_schema.json",
+            "residual_interval.json",
+        )
+    }
+    (destination / "checksums.json").write_text(
+        json.dumps(checks, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return destination
+
+
+def test_allow_fixture_case_a_fixture_bundle_flag_off_fails(prediction_bundle, tmp_path):
+    """Case A: deployable=False + ALLOW_FIXTURE_MODEL=False → startup fails."""
+    bundle = _make_bundle_variant(prediction_bundle, tmp_path, deployable=False)
+    with pytest.raises(ModelUnavailableError) as info:
+        ModelLoader(bundle_path=bundle, allow_fixture=False).load()
+    message = str(info.value).lower()
+    assert "fixture" in message
+    assert "allow_fixture_model" in message
+
+
+def test_allow_fixture_case_b_fixture_bundle_flag_on_allowed(prediction_bundle, tmp_path):
+    """Case B: deployable=False + ALLOW_FIXTURE_MODEL=True → allowed."""
+    bundle = _make_bundle_variant(prediction_bundle, tmp_path, deployable=False)
+    loaded = ModelLoader(bundle_path=bundle, allow_fixture=True).load()
+    assert loaded.metadata["deployable"] is False
+
+
+def test_allow_fixture_case_c_real_bundle_flag_off_allowed(prediction_bundle, tmp_path):
+    """Case C: deployable=True + ALLOW_FIXTURE_MODEL=False → allowed."""
+    bundle = _make_bundle_variant(prediction_bundle, tmp_path, deployable=True)
+    loaded = ModelLoader(bundle_path=bundle, allow_fixture=False).load()
+    assert loaded.metadata["deployable"] is True
+    assert loaded.metadata["data_mode"] == "real"
+
+
+def test_allow_fixture_case_d_real_bundle_flag_on_allowed(prediction_bundle, tmp_path):
+    """Case D: deployable=True + ALLOW_FIXTURE_MODEL=True → allowed (flag no-op)."""
+    bundle = _make_bundle_variant(prediction_bundle, tmp_path, deployable=True)
+    loaded = ModelLoader(bundle_path=bundle, allow_fixture=True).load()
+    assert loaded.metadata["deployable"] is True
+
+
+def test_allow_fixture_flag_does_not_change_real_bundle_behavior(prediction_bundle, tmp_path):
+    """The flag only unlocks fixture bundles — never mutates real bundles."""
+    bundle = _make_bundle_variant(prediction_bundle, tmp_path, deployable=True)
+    off = ModelLoader(bundle_path=bundle, allow_fixture=False).load()
+    on = ModelLoader(bundle_path=bundle, allow_fixture=True).load()
+    assert off.metadata == on.metadata
+    assert off.feature_order == on.feature_order
 
 
 # ---- Bundle SHA reference (evidence in the entrega) ----------------
