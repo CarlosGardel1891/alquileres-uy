@@ -19,7 +19,29 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .logging_config import REQUEST_ID_HEADER, get_logger, get_request_id
+from .logging_config import NO_REQUEST_ID, REQUEST_ID_HEADER, get_logger, get_request_id
+
+
+def _request_id_from(request: Request) -> str:
+    """Locate the request id independently of the calling task.
+
+    ``BaseHTTPMiddleware`` runs the downstream app in a child task; the
+    ContextVar set inside that child is not visible from the outer task
+    where the ``ServerErrorMiddleware``-invoked exception handler runs.
+    ``request.state`` lives on ``scope['state']`` which IS shared, so
+    prefer it, then fall back to the incoming header, and finally to
+    the ContextVar for anything that runs in-task.
+    """
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        return request_id
+    header = request.headers.get(REQUEST_ID_HEADER, "").strip()
+    if header:
+        return header
+    ctx_value = get_request_id()
+    if ctx_value and ctx_value != NO_REQUEST_ID:
+        return ctx_value
+    return NO_REQUEST_ID
 
 
 def _envelope(code: str, message: str) -> dict[str, Any]:
@@ -67,7 +89,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _handle_request_validation(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        request_id = get_request_id()
+        request_id = _request_id_from(request)
         logger.warning("request validation failed at %s", request.url.path)
         return _json_error(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -78,7 +100,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ValidationError)
     async def _handle_pydantic_validation(request: Request, exc: ValidationError) -> JSONResponse:
-        request_id = get_request_id()
+        request_id = _request_id_from(request)
         logger.warning("pydantic validation failed at %s", request.url.path)
         return _json_error(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -89,7 +111,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
-        request_id = get_request_id()
+        request_id = _request_id_from(request)
         code = _slug_for_status(exc.status_code)
         message = str(exc.detail) if exc.detail else code.replace("_", " ").title()
         if exc.status_code >= 500:
@@ -105,7 +127,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
-        request_id = get_request_id()
+        request_id = _request_id_from(request)
         # Never leak the exception message or traceback to the client;
         # log the failure so ops can investigate via request_id.
         logger.exception("unhandled exception at %s", request.url.path)

@@ -371,6 +371,19 @@ Endpoints:
 - `GET /model-info` → HTTP `501 Not Implemented` (contrato reservado).
 - `POST /predict` → recibe un payload con los campos `property_type`, `price`, `bedrooms`, `bathrooms`, `covered_area`, `total_area`, `latitude`, `longitude`, `neighborhood` y devuelve `{prediction, currency, model_version, prediction_timestamp}`. La API carga el serving bundle al startup — sin bundle válido no arranca.
 
+**Observabilidad (Fase 8)**:
+
+- `GET /metrics` (default) — exposición Prometheus con:
+  - `prediction_requests_total{endpoint, method, status_code}` — Counter.
+  - `prediction_errors_total{endpoint, method, status_code}` — Counter, sólo 5xx.
+  - `prediction_latency_seconds{endpoint, method}` — Histogram con buckets 5ms–10s.
+  - `model_loaded` — Gauge (1 = loaded, 0 = missing / shutdown).
+- Middleware `MetricsMiddleware` mide duración de cada request (try/finally), actualiza los counters + histogram y emite una línea estructurada `http request | method=... | endpoint=... | status_code=... | duration_ms=... | model_version=...`. El endpoint `/metrics` está excluido de sus propios contadores.
+- Configuración:
+  - `ALQUILERES_API_ENABLE_METRICS` (default `true`) — deshabilitar quita el middleware y el endpoint.
+  - `ALQUILERES_API_METRICS_PATH` (default `/metrics`).
+- Registry dedicado (`CollectorRegistry`) para no colisionar con el global.
+
 **Infraestructura de producción (Fase 7)**:
 
 - Middleware `RequestIdMiddleware` — cada request gana / mantiene el header `X-Request-ID`; el id viaja por un `ContextVar` para logs y se echoa en toda respuesta (incluso las de error).
