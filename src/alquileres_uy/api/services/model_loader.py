@@ -22,11 +22,19 @@ class ModelUnavailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class LoadedModel:
-    """A validated serving bundle in memory."""
+    """A validated serving bundle in memory.
+
+    ``feature_order`` is the authoritative, ordered list of feature
+    names the model expects at inference time. It is sourced from the
+    bundle's ``metadata.json.feature_list`` — never reconstructed in
+    code — so the API stays decoupled from any particular model's
+    feature set.
+    """
 
     model: Any
     metadata: dict[str, Any]
     bundle_path: Path
+    feature_order: tuple[str, ...]
 
     @property
     def version(self) -> str:
@@ -63,13 +71,34 @@ class ModelLoader:
         try:
             payload = load_serving_bundle(self._bundle_path, allow_fixture=self._allow_fixture)
         except ServingBundleError as exc:
+            message = str(exc)
+            if "fixture" in message.lower() and not self._allow_fixture:
+                raise ModelUnavailableError(
+                    f"serving bundle at {self._bundle_path!s} is a fixture bundle "
+                    "and ALLOW_FIXTURE_MODEL is disabled; set "
+                    "ALQUILERES_API_ALLOW_FIXTURE_MODEL=true only in dev/test"
+                ) from exc
             raise ModelUnavailableError(
                 f"serving bundle at {self._bundle_path!s} is invalid: {exc}"
             ) from exc
+
+        metadata = payload["metadata"]
+        feature_list = metadata.get("feature_list")
+        if not isinstance(feature_list, list) or not feature_list:
+            raise ModelUnavailableError(
+                f"serving bundle at {self._bundle_path!s} is missing the feature contract "
+                "(metadata.feature_list must be a non-empty list)"
+            )
+        if not all(isinstance(name, str) and name for name in feature_list):
+            raise ModelUnavailableError(
+                f"serving bundle at {self._bundle_path!s} has an invalid feature contract "
+                "(metadata.feature_list entries must be non-empty strings)"
+            )
         return LoadedModel(
             model=payload["model"],
-            metadata=payload["metadata"],
+            metadata=metadata,
             bundle_path=self._bundle_path,
+            feature_order=tuple(feature_list),
         )
 
 
