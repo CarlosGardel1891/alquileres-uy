@@ -11,6 +11,43 @@ Docker image, release script, docs) resolves back to it.
 
 ## [Unreleased]
 
+### Added — Fase 13 (web UI polish)
+
+- Clearer form state: explicit `*` required marks in every label
+  (with a `visually-hidden` "obligatorio" companion for screen
+  readers), a `required-legend` above the form, helper text under
+  key fields (barrio, superficie total / cubierta, precio),
+  `aria-describedby` wiring on every field, and a visible success
+  status pill after a successful prediction.
+- Better comparison card: a "Publicado vs. Estimado" headline with
+  distinct visual weight for each side, a natural-language
+  interpretation per state ("buen precio" / "en línea con el
+  mercado" / "precio elevado"), rounded percent output (drops the
+  trailing `.0` for whole numbers) and an empty state that appears
+  when no published price was entered.
+- Reinforced accessibility: single `h1` in the base template,
+  `aria-describedby` on inputs / `<form>`, `role`/`aria-label` on
+  the status indicator, `aria-labelledby` on every card, stronger
+  `:focus-visible` ring (outline + box-shadow), sticky skip link,
+  `.visually-hidden` utility.
+- Sharper microcopy: hero eyebrow ("Herramienta pública · beta"),
+  restated purpose ("Estimá el precio mensual de un alquiler…"),
+  a privacy note enumerating the fields sent to the server, an
+  explicit "es una estimación" disclaimer in the result card, and
+  a footer tagline.
+- Home visual polish: bigger spacing / radius tokens, brand mark in
+  the header, footer split into primary + secondary rows with a
+  monospace API-version chip, model info card with a hint line
+  pointing at `GET /version`.
+- Subtle animations: `fade-in-up` on result + error cards, `fade-in`
+  on inline feedback, transitions on cards / buttons / inputs.
+  Fully disabled under `prefers-reduced-motion`.
+- Distinct error taxonomy: `validation` / `network` / `timeout` /
+  `unavailable` / `model` / `unknown`, each with a coloured chip
+  in the error card, a friendly Spanish title + message and an
+  optional `error-guidance` slot with next steps.
+- 44 new tests in `tests/api/test_web_ui_polish.py`.
+
 ### Added — Fase 12 (web UI enhancements)
 
 - Form persistence via `localStorage`: every input change is saved to

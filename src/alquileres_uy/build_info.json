@@ -1,7 +1,7 @@
 {
   "api_version": "0.10.0",
-  "build_date": "2026-08-08T14:06:47+00:00",
-  "git_commit": "f4d0c91ea723",
+  "build_date": "2026-08-08T14:22:20+00:00",
+  "git_commit": "2d853e69a8a4",
   "platform": "Windows-10-10.0.19045-SP0",
   "python_version": "3.12.10",
   "version": "0.10.0"
