@@ -11,6 +11,17 @@
 #   volume + ALQUILERES_API_MODEL_BUNDLE_PATH.
 FROM python:3.12-slim AS runtime
 
+# APP_VERSION is passed in by the release workflow / release-check job
+# so the wheel version, the OCI label and the /build endpoint all agree.
+# When building locally you can override with:
+#   docker build --build-arg APP_VERSION=$(python -c "import alquileres_uy;print(alquileres_uy.__version__)") .
+ARG APP_VERSION=0.10.0
+
+LABEL org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.source="https://github.com/CarlosGardel1891/alquileres-uy" \
+      org.opencontainers.image.description="alquileres-uy — rental price prediction API for Montevideo" \
+      org.opencontainers.image.licenses="MIT"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -31,9 +42,15 @@ RUN python -m pip install --upgrade pip \
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 COPY scripts/run_api.py ./scripts/run_api.py
+COPY scripts/generate_build_info.py ./scripts/generate_build_info.py
 
 # Copy the serving bundle (may be an empty placeholder during CI builds).
 COPY artifacts/models/ ./artifacts/models/
+
+# Regenerate build_info.json inside the image so ``git_commit`` reflects
+# whatever the build context was (may be "unknown" for tarball builds
+# without a .git directory — that is intentional).
+RUN python scripts/generate_build_info.py
 
 # Install the project itself so the module resolver finds alquileres_uy.
 RUN pip install --no-cache-dir .
