@@ -11,12 +11,16 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .._version import __version__ as _PACKAGE_VERSION
+
 
 class ApiSettings(BaseSettings):
     """Environment-driven configuration for the prediction API."""
 
     APP_NAME: str = "alquileres-uy prediction API"
-    APP_VERSION: str = "0.1.0"
+    # APP_VERSION is anchored to the packaged version so that a wheel /
+    # container ships with a single semver number. See _version.py.
+    APP_VERSION: str = _PACKAGE_VERSION
     HOST: str = "127.0.0.1"
     PORT: int = 8000
     DEBUG: bool = False

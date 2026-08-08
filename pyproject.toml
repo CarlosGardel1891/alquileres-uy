@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alquileres-uy"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Pipeline end-to-end para análisis y predicción de alquileres en Montevideo."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -46,6 +46,12 @@ api = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "alquileres_uy._version.__version__" }
+
+[tool.setuptools.package-data]
+alquileres_uy = ["build_info.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
