@@ -166,3 +166,94 @@ jobs:
           tags: alquileres-uy-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release-check:
+    name: Release readiness check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          pip install -r requirements-dev.txt
+
+      - name: Resolve current package version
+        id: version
+        run: |
+          VERSION="$(PYTHONPATH=src python -c 'from alquileres_uy._version import __version__; print(__version__)')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "package version = ${VERSION}"
+
+      - name: CHANGELOG entry exists for current version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if ! grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section" >&2
+            exit 1
+          fi
+          echo "found '## [${VERSION}]' in CHANGELOG.md"
+
+      - name: pyproject dynamic version matches package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILT_VERSION="$(PYTHONPATH=src python -c 'from importlib.metadata import version; print(version(\"alquileres-uy\"))' 2>/dev/null || echo skip)"
+          if [ "${BUILT_VERSION}" != "skip" ] && [ "${BUILT_VERSION}" != "${VERSION}" ]; then
+            echo "::error::installed metadata version (${BUILT_VERSION}) != _version (${VERSION})" >&2
+            exit 1
+          fi
+
+      - name: Regenerate build_info.json
+        run: |
+          python scripts/generate_build_info.py --print
+          test -s src/alquileres_uy/build_info.json
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Wheel + sdist contain the current version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ls dist
+          test -f "dist/alquileres_uy-${VERSION}-py3-none-any.whl" || \
+            test -f "dist/alquileres_uy-${VERSION}.tar.gz"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare empty serving-bundle placeholder
+        run: |
+          mkdir -p artifacts/models/.placeholder
+          echo "release-check image — no bundle" \
+            > artifacts/models/.placeholder/README.txt
+
+      - name: Docker build with version arg (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: alquileres-uy-api:release-check
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify OCI labels on built image
+        run: |
+          docker inspect alquileres-uy-api:release-check \
+            --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+            | tee labels.txt
+          grep -qx "${{ steps.version.outputs.version }}" labels.txt
