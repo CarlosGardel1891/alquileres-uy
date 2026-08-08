@@ -11,6 +11,43 @@ Docker image, release script, docs) resolves back to it.
 
 ## [Unreleased]
 
+### Added — Fase 12 (web UI enhancements)
+
+- Form persistence via `localStorage`: every input change is saved to
+  a namespaced key; a page reload restores the last values; the
+  Limpiar button wipes them without submitting anything.
+- Local history sidebar with the last 10 predictions. Each entry
+  shows barrio, tipo, superficie, precio estimado, timestamp and a
+  state badge (`ok` / `error`). Clicking an entry restores the form
+  values so the user can re-run or tweak. Latitude / longitude /
+  price are deliberately excluded from the stored payload.
+- "Cargar ejemplo" button that fills every form field with a valid
+  demo listing — never auto-submits.
+- "Copiar resultado" button that puts precio + modelo + versión +
+  timestamp on the clipboard (Clipboard API with a `document.execCommand`
+  fallback). Live-region feedback confirms the copy.
+- Loading / success / error / retrying states on the submit button
+  and inline status pill. Never uses `alert()`, `confirm()` or a
+  modal — everything is inline and screen-reader friendly.
+- "Reintentar" button in the error card that resubmits the last
+  payload without asking for the form again.
+- Client-side validation before submit: required-field checks, per
+  field range checks, latitud / longitud bounds, superficie > 0,
+  precio ≥ 0, and a covered-area ≤ total-area sanity check. Server
+  validation stays authoritative.
+- Enhanced comparison visual: three-zone gradient bar with an
+  animated marker, currency-formatted absolute / percent differences,
+  and a textual interpretation per state.
+- Accessibility pass: labels for every input, `role="alert"` on
+  inline field errors, `aria-live` regions for status / result /
+  copy feedback / model info, `aria-busy` on the submit button,
+  `:focus-visible` outline, high-contrast palette, `prefers-reduced-motion`
+  guard, sticky skip link.
+- Sidebar layout that collapses to a single column on viewports ≤
+  960 px and stacks the form to one column ≤ 640 px.
+- 49 new tests in `tests/api/test_web_ui_enhancements.py` covering
+  every part above at the source / HTTP level.
+
 ### Added — Fase 11 (web UI)
 
 - Server-rendered home page at `GET /` (Jinja2 templates, no
