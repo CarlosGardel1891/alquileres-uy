@@ -21,7 +21,7 @@ from .logging_config import REQUEST_ID_HEADER, configure_logging, get_logger
 from .metrics import render_latest
 from .middleware import MetricsMiddleware, RequestIdMiddleware
 from .prediction_service import PredictionTimeoutError
-from .routes import health, model_info, predict, ready, version
+from .routes import build, health, model_info, predict, ready, version
 
 
 def _register_prediction_timeout_handler(app: FastAPI) -> None:
@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
         app.add_middleware(MetricsMiddleware, exclude_paths=(settings.METRICS_PATH,))
     register_exception_handlers(app)
     _register_prediction_timeout_handler(app)
+    app.include_router(build.router)
     app.include_router(health.router)
     app.include_router(model_info.router)
     app.include_router(predict.router)
