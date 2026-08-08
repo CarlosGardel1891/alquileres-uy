@@ -18,9 +18,6 @@
 
   const HISTORY_LIMIT = 10;
 
-  // Form-value persistence includes the model-feature fields plus the
-  // optional published price. We do not persist derived data
-  // (predictions, comparisons) — the history list covers that.
   const PERSISTED_FIELDS = [
     "neighborhood",
     "property_type",
@@ -62,6 +59,8 @@
   const resultCard = byId("result-card");
   const errorCard = byId("error-card");
   const errorMessage = byId("error-message");
+  const errorGuidance = byId("error-guidance");
+  const errorKind = byId("error-kind");
   const errorDismiss = byId("error-dismiss");
   const modelInfoRoot = byId("model-info");
   const statusIndicator = byId("status-indicator");
@@ -106,6 +105,14 @@
     }
   }
 
+  function roundPercent(value) {
+    if (!isFinite(value)) return "0";
+    // Rounded to one decimal for readability, but drop trailing ".0".
+    const rounded = Math.round(value * 10) / 10;
+    if (Number.isInteger(rounded)) return `${rounded}`;
+    return rounded.toFixed(1);
+  }
+
   function setStatus(state, label) {
     if (!statusIndicator) return;
     const dot = statusIndicator.querySelector(".status-dot");
@@ -127,9 +134,23 @@
     submitBtn.setAttribute("aria-busy", busy ? "true" : "false");
   }
 
-  function showError(message) {
+  function showError({ kind, title, message, guidance }) {
     if (!errorCard) return;
+    if (errorKind) {
+      errorKind.dataset.kind = kind || "unknown";
+      setText(errorKind, ERROR_KIND_LABEL[kind] || "Error");
+    }
+    const titleEl = byId("error-title");
+    if (titleEl) setText(titleEl, title || "No pudimos calcular el precio");
     setText(errorMessage, message || "Ocurrió un problema inesperado.");
+    if (errorGuidance) {
+      if (guidance) {
+        setText(errorGuidance, guidance);
+        errorGuidance.hidden = false;
+      } else {
+        errorGuidance.hidden = true;
+      }
+    }
     errorCard.hidden = false;
     errorCard.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -171,7 +192,7 @@
         }
       });
     } catch (_) {
-      // Ignore corrupt payloads — the form will keep its defaults.
+      /* corrupt payload — keep defaults */
     }
   }
 
@@ -185,7 +206,7 @@
       });
       storage.setItem(STORAGE_KEYS.form, JSON.stringify(values));
     } catch (_) {
-      // Silently ignore quota / permission errors.
+      /* quota / permission — silent */
     }
   }
 
@@ -225,8 +246,7 @@
   function pushHistoryEntry(entry) {
     const entries = loadHistory();
     entries.unshift(entry);
-    const trimmed = entries.slice(0, HISTORY_LIMIT);
-    saveHistory(trimmed);
+    saveHistory(entries.slice(0, HISTORY_LIMIT));
     renderHistory();
   }
 
@@ -304,7 +324,7 @@
       el.value = String(entry[name]);
     });
     saveFormValues();
-    setFormStatus("", "Restauramos el formulario desde el historial.");
+    setFormStatus("", "Restauramos los datos desde el historial.");
     hideError();
     const anchor = byId("form-card");
     if (anchor && anchor.scrollIntoView) {
@@ -312,51 +332,100 @@
     }
   }
 
-  // ---- error messages ----------------------------------------------
+  // ---- error taxonomy ----------------------------------------------
 
-  function humanReadableError(status, body) {
+  const ERROR_KIND_LABEL = {
+    validation: "Validación",
+    network: "Red",
+    timeout: "Timeout",
+    unavailable: "API no disponible",
+    model: "Modelo no listo",
+    unknown: "Error",
+  };
+
+  function classifyError(status, body) {
     if (status === 0) {
-      return "No pudimos conectarnos con la API. Verificá tu conexión o probá de nuevo en unos segundos.";
+      return {
+        kind: "network",
+        title: "No pudimos conectarnos con la API",
+        message: "Parece que no hay conexión con el servidor.",
+        guidance:
+          "Verificá tu conexión a internet o probá de nuevo en unos segundos con el botón Reintentar.",
+      };
     }
     if (status === 408 || status === 504) {
-      return "La API tardó demasiado en responder. Intentá de nuevo en unos segundos.";
+      return {
+        kind: "timeout",
+        title: "La API tardó demasiado",
+        message: "El servidor no respondió a tiempo.",
+        guidance: "Intentá de nuevo en unos segundos.",
+      };
     }
     if (status === 422) {
-      return "Alguno de los datos ingresados no es válido. Revisá el formulario y volvé a intentar.";
+      return {
+        kind: "validation",
+        title: "Datos inválidos",
+        message: "Alguno de los datos no cumple con lo que espera el servidor.",
+        guidance:
+          "Revisá los valores del formulario — pueden estar fuera de rango o faltar campos obligatorios.",
+      };
     }
     if (status === 503) {
       const code = body && body.error && body.error.code;
       if (code === "prediction_timeout") {
-        return "La predicción tardó demasiado. Volvé a intentar en unos segundos.";
+        return {
+          kind: "timeout",
+          title: "La predicción tardó demasiado",
+          message: "El modelo no pudo generar una estimación dentro del tiempo permitido.",
+          guidance: "Probá de nuevo en unos segundos con el botón Reintentar.",
+        };
       }
       if (code === "service_unavailable" || code === "model_not_ready") {
-        return "El modelo no está disponible en este momento. Probá de nuevo más tarde.";
+        return {
+          kind: "model",
+          title: "El modelo no está listo",
+          message: "El modelo todavía no terminó de cargar o está indisponible.",
+          guidance: "Esperá unos segundos y volvé a intentar. Chequeá el indicador de estado arriba.",
+        };
       }
-      return "El servicio no está disponible en este momento.";
+      return {
+        kind: "unavailable",
+        title: "Servicio no disponible",
+        message: "La API no está aceptando pedidos en este momento.",
+        guidance: "Reintentá en unos minutos.",
+      };
     }
     if (status >= 500) {
-      return "El servicio tuvo un problema interno. Intentá de nuevo más tarde.";
+      return {
+        kind: "unavailable",
+        title: "Error interno del servicio",
+        message: "El servidor tuvo un problema inesperado.",
+        guidance: "Intentá de nuevo en unos minutos.",
+      };
     }
-    if (body && body.error && body.error.message) {
-      return body.error.message;
-    }
-    return "No pudimos calcular el precio. Revisá los datos y volvé a intentar.";
+    const apiMessage = body && body.error && body.error.message;
+    return {
+      kind: "unknown",
+      title: "No pudimos calcular el precio",
+      message: apiMessage || "Revisá los datos y volvé a intentar.",
+      guidance: null,
+    };
   }
 
   // ---- UI validation -----------------------------------------------
 
   const NUMERIC_FIELDS = {
-    bedrooms: { min: 0, max: 20, message: "Ingresá un número entre 0 y 20." },
-    bathrooms: { min: 0, max: 10, message: "Ingresá un número entre 0 y 10." },
+    bedrooms: { min: 0, max: 20, message: "Ingresá un número entero entre 0 y 20." },
+    bathrooms: { min: 0, max: 10, message: "Ingresá un número entero entre 0 y 10." },
     total_area: {
       min: 1,
       max: 10000,
-      message: "La superficie total debe ser mayor a 0 (m²).",
+      message: "La superficie total debe ser mayor a 0 (en m²).",
     },
     covered_area: {
       min: 1,
       max: 10000,
-      message: "La superficie cubierta debe ser mayor a 0 (m²).",
+      message: "La superficie cubierta debe ser mayor a 0 (en m²).",
     },
     latitude: { min: -90, max: 90, message: "La latitud debe estar entre -90 y 90." },
     longitude: { min: -180, max: 180, message: "La longitud debe estar entre -180 y 180." },
@@ -405,7 +474,6 @@
         errors.push(name);
       }
     });
-    // Cross-field sanity checks.
     const coveredArea = Number(byId("covered_area").value);
     const totalArea = Number(byId("total_area").value);
     if (
@@ -443,19 +511,19 @@
     let interpretation;
     if (diffPct <= -5) {
       state = "below";
-      label = "🟢 debajo del valor estimado";
+      label = "🟢 buen precio";
       interpretation =
-        "El precio publicado está por debajo de lo que estimamos — buena oportunidad si el estado real coincide con lo declarado.";
+        "El precio publicado está por debajo de nuestra estimación. Puede ser una buena oportunidad si el estado real coincide con lo declarado.";
     } else if (diffPct <= 10) {
       state = "near";
-      label = "🟡 cercano al valor estimado";
+      label = "🟡 en línea con el mercado";
       interpretation =
-        "El precio publicado está en línea con nuestra estimación — dentro del margen habitual del mercado.";
+        "El precio publicado está cerca de nuestra estimación — dentro del margen habitual del mercado.";
     } else {
       state = "over";
-      label = "🔴 muy por encima del valor estimado";
+      label = "🔴 precio elevado";
       interpretation =
-        "El precio publicado supera nuestra estimación — vale la pena revisar comparables antes de negociar.";
+        "El precio publicado está por encima de nuestra estimación. Conviene mirar comparables antes de decidir.";
     }
     return { diffAbs, diffPct, state, label, interpretation };
   }
@@ -463,7 +531,6 @@
   function updateComparisonBar(diffPct) {
     const marker = byId("comparison-bar-marker");
     if (!marker) return;
-    // Map the diff percent to a 0–100 % scale, clamped to [-20, +20].
     const clamped = Math.max(-20, Math.min(20, diffPct));
     const percentInBar = ((clamped + 20) / 40) * 100;
     marker.style.left = `${percentInBar}%`;
@@ -474,10 +541,6 @@
   function collectPayload() {
     const priceInput = byId("price").value;
     const publishedPrice = priceInput === "" ? null : Number(priceInput);
-    // The API contract requires price > 0. When the user leaves the
-    // published price blank we submit a minimal placeholder so the
-    // request validates, and we hide the comparison card because the
-    // user never gave us a reference to compare against.
     const priceForApi = publishedPrice !== null && publishedPrice > 0 ? publishedPrice : 1;
     return {
       payload: {
@@ -499,7 +562,17 @@
     if (event) event.preventDefault();
     const errors = validateForm();
     if (errors.length > 0) {
-      setFormStatus("error", "Revisá los campos marcados en rojo antes de enviar.");
+      setFormStatus(
+        "error",
+        `Revisá ${errors.length === 1 ? "el campo marcado" : "los campos marcados"} antes de enviar.`
+      );
+      showError({
+        kind: "validation",
+        title: "Faltan datos o hay valores fuera de rango",
+        message: "El formulario todavía no está listo para enviar.",
+        guidance:
+          "Corrigé los campos marcados en rojo. Los mensajes aparecen debajo de cada campo con problemas.",
+      });
       const firstErrorField = byId(errors[0]);
       if (firstErrorField && firstErrorField.focus) firstErrorField.focus();
       return;
@@ -524,7 +597,7 @@
     } catch (_) {
       setSubmitBusy(false);
       setFormStatus("error", "No pudimos conectar con la API.");
-      showError(humanReadableError(0, null));
+      showError(classifyError(0, null));
       pushHistoryEntry(buildHistoryEntry({ state: "error" }));
       return;
     }
@@ -537,11 +610,11 @@
 
     if (!response.ok) {
       setFormStatus("error", "El servicio no pudo calcular el precio.");
-      showError(humanReadableError(response.status, body));
+      showError(classifyError(response.status, body));
       pushHistoryEntry(buildHistoryEntry({ state: "error" }));
       return;
     }
-    setFormStatus("success", "Listo — mostramos el resultado abajo.");
+    setFormStatus("success", "Listo — la estimación está debajo. ✓");
     lastResult = body;
     renderResult(body, publishedPrice);
     pushHistoryEntry(
@@ -573,19 +646,27 @@
 
   function renderResult(body, publishedPrice) {
     if (!body || typeof body.prediction !== "number") {
-      showError("La respuesta de la API no tiene el formato esperado.");
+      showError({
+        kind: "unknown",
+        title: "Respuesta inesperada de la API",
+        message: "La respuesta no tiene el formato que esperábamos.",
+        guidance:
+          "Recargá la página y volvé a intentar. Si el problema persiste, revisá el estado del servicio.",
+      });
       return;
     }
     setText(byId("result-price"), formatCurrency(body.prediction, body.currency));
     setText(byId("result-currency"), body.currency || "USD");
     setText(byId("result-model"), body.model_type || "—");
     setText(byId("result-version"), body.model_version || "—");
-    setText(byId("result-timestamp"), body.prediction_timestamp || "—");
+    setText(byId("result-timestamp"), formatTimestamp(body.prediction_timestamp));
 
     const comparison = classifyComparison(publishedPrice, body.prediction);
     const comparisonCard = byId("comparison");
+    const comparisonEmpty = byId("comparison-empty");
     if (comparison) {
       comparisonCard.hidden = false;
+      if (comparisonEmpty) comparisonEmpty.hidden = true;
       const badge = byId("comparison-badge");
       badge.dataset.state = comparison.state;
       setText(badge, comparison.label);
@@ -593,10 +674,11 @@
       setText(byId("comparison-published"), formatCurrency(publishedPrice, body.currency));
       setText(byId("comparison-estimated"), formatCurrency(body.prediction, body.currency));
       setText(byId("diff-absolute"), formatCurrency(comparison.diffAbs, body.currency));
-      setText(byId("diff-percent"), `${comparison.diffPct.toFixed(1)} %`);
+      setText(byId("diff-percent"), `${roundPercent(comparison.diffPct)} %`);
       updateComparisonBar(comparison.diffPct);
     } else {
       comparisonCard.hidden = true;
+      if (comparisonEmpty) comparisonEmpty.hidden = false;
     }
 
     resultCard.hidden = false;
@@ -624,7 +706,7 @@
     } catch (_) {
       setSubmitBusy(false);
       setFormStatus("error", "Seguimos sin conexión con la API.");
-      showError(humanReadableError(0, null));
+      showError(classifyError(0, null));
       return;
     }
     try {
@@ -635,10 +717,10 @@
     setSubmitBusy(false);
     if (!response.ok) {
       setFormStatus("error", "El servicio sigue devolviendo un error.");
-      showError(humanReadableError(response.status, body));
+      showError(classifyError(response.status, body));
       return;
     }
-    setFormStatus("success", "Listo — mostramos el resultado abajo.");
+    setFormStatus("success", "Listo — la estimación está debajo. ✓");
     lastResult = body;
     renderResult(body, lastPublishedPrice);
   }
@@ -696,7 +778,10 @@
     });
     saveFormValues();
     clearFieldErrors();
-    setFormStatus("", "Cargamos un ejemplo — revisá los datos y calculá cuando quieras.");
+    setFormStatus(
+      "",
+      "Cargamos un caso de ejemplo. Revisá los datos y calculá cuando quieras."
+    );
   }
 
   // ---- model info (from /version) ----------------------------------
@@ -710,7 +795,7 @@
       const map = {
         model_type: data.model_type,
         model_version: data.model_version,
-        trained_at: data.trained_at,
+        trained_at: formatTimestamp(data.trained_at),
         bundle_sha256: data.bundle_sha256,
         api_version: data.api_version,
       };
@@ -719,7 +804,7 @@
         if (node) setText(node, value || "—");
       });
     } catch (_) {
-      // Silent: the header status indicator already reflects reachability.
+      /* silent: status pill already reflects reachability */
     }
   }
 
@@ -735,7 +820,7 @@
       healthOk = false;
     }
     if (!healthOk) {
-      setStatus("error", "● Error — API no disponible");
+      setStatus("error", "● API no disponible");
       return;
     }
     try {
@@ -758,7 +843,6 @@
     renderHistory();
     if (form) {
       form.addEventListener("submit", submitPrediction);
-      // Save on every change so a page reload / crash preserves the input.
       form.addEventListener("input", saveFormValues);
       form.addEventListener("change", saveFormValues);
     }

@@ -5,88 +5,175 @@
 {% block content %}
 <div class="layout" id="layout">
   <div class="layout-main">
-    <section class="card hero-card">
-      <h2>Estimador de alquileres para Montevideo</h2>
+    <section class="card hero-card" aria-labelledby="hero-title">
+      <p class="eyebrow">Herramienta pública · beta</p>
+      <h2 id="hero-title">Estimá el precio mensual de un alquiler en Montevideo</h2>
       <p class="lead">
-        Completá los datos de la propiedad y obtené una estimación del precio de alquiler mensual
-        basada en el modelo entrenado sobre publicaciones de MercadoLibre Uruguay.
+        Completá los datos de la propiedad y obtené una estimación de referencia calculada por
+        el modelo entrenado sobre publicaciones de MercadoLibre Uruguay. Es una <strong>estimación</strong>,
+        no una tasación oficial — usala como punto de partida.
+      </p>
+      <p class="hero-privacy">
+        Al enviar el formulario se transmiten al servidor únicamente los atributos de la propiedad
+        (barrio, tipo, superficie, dormitorios, baños, coordenadas). No guardamos identificación
+        del usuario ni compartimos los datos con terceros.
       </p>
       <div class="hero-actions">
         <a href="#form-card" class="btn btn-primary hero-cta">Calcular precio</a>
-        <button type="button" class="btn btn-ghost" id="load-example-btn">Cargar ejemplo</button>
+        <button type="button" class="btn btn-ghost" id="load-example-btn">
+          Cargar ejemplo
+        </button>
       </div>
-      <div class="model-info" id="model-info" aria-live="polite">
-        <h3>Modelo en producción</h3>
+      <div class="model-info" id="model-info" aria-labelledby="model-info-title" aria-live="polite">
+        <h3 id="model-info-title">Modelo en producción</h3>
+        <p class="model-info-hint">
+          Datos publicados por el servicio en <code>GET /version</code>. Se actualizan al cargar la página.
+        </p>
         <dl class="kv-list">
-          <div><dt>Modelo</dt><dd data-field="model_type">—</dd></div>
-          <div><dt>Versión</dt><dd data-field="model_version">—</dd></div>
-          <div><dt>Entrenado</dt><dd data-field="trained_at">—</dd></div>
-          <div><dt>Bundle SHA</dt><dd data-field="bundle_sha256" class="mono">—</dd></div>
-          <div><dt>API</dt><dd data-field="api_version">{{ app_version }}</dd></div>
+          <div>
+            <dt>Modelo</dt>
+            <dd data-field="model_type">—</dd>
+          </div>
+          <div>
+            <dt>Versión</dt>
+            <dd data-field="model_version">—</dd>
+          </div>
+          <div>
+            <dt>Entrenado el</dt>
+            <dd data-field="trained_at">—</dd>
+          </div>
+          <div>
+            <dt>Bundle SHA</dt>
+            <dd data-field="bundle_sha256" class="mono">—</dd>
+          </div>
+          <div>
+            <dt>API</dt>
+            <dd data-field="api_version">{{ app_version }}</dd>
+          </div>
         </dl>
       </div>
     </section>
 
-    <section class="card form-card" id="form-card">
-      <h2>Datos de la propiedad</h2>
-      <form id="predict-form" class="form-grid" novalidate aria-describedby="form-status">
+    <section class="card form-card" id="form-card" aria-labelledby="form-title">
+      <div class="form-header">
+        <h2 id="form-title">Datos de la propiedad</h2>
+        <p class="required-legend">
+          <span class="required-mark" aria-hidden="true">*</span>
+          Campos obligatorios.
+        </p>
+      </div>
+      <form id="predict-form" class="form-grid" novalidate aria-describedby="form-status form-help">
+        <p id="form-help" class="form-intro">
+          Ingresá lo que sabés de la propiedad. Los campos marcados con
+          <span class="required-mark" aria-hidden="true">*</span> son obligatorios para calcular la estimación.
+        </p>
         <div class="field">
-          <label for="neighborhood">Barrio</label>
+          <label for="neighborhood">
+            Barrio
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
           <input type="text" id="neighborhood" name="neighborhood"
                  required minlength="1" maxlength="80" autocomplete="off"
-                 placeholder="p. ej. Pocitos" aria-describedby="neighborhood-error" />
+                 placeholder="p. ej. Pocitos"
+                 aria-describedby="neighborhood-hint neighborhood-error" />
+          <p class="field-hint" id="neighborhood-hint">
+            Escribí el nombre del barrio tal como aparece en la publicación.
+          </p>
           <p class="field-error" id="neighborhood-error" role="alert" hidden></p>
         </div>
         <div class="field">
-          <label for="property_type">Tipo</label>
-          <select id="property_type" name="property_type" required>
+          <label for="property_type">
+            Tipo
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
+          <select id="property_type" name="property_type" required
+                  aria-describedby="property_type-hint">
             <option value="apartment">Apartamento</option>
             <option value="house">Casa</option>
           </select>
+          <p class="field-hint" id="property_type-hint">
+            Elegí el tipo que mejor describe la unidad.
+          </p>
         </div>
         <div class="field">
-          <label for="bedrooms">Dormitorios</label>
+          <label for="bedrooms">
+            Dormitorios
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
           <input type="number" id="bedrooms" name="bedrooms" required min="0" max="20" step="1" value="2"
                  aria-describedby="bedrooms-error" />
           <p class="field-error" id="bedrooms-error" role="alert" hidden></p>
         </div>
         <div class="field">
-          <label for="bathrooms">Baños</label>
+          <label for="bathrooms">
+            Baños
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
           <input type="number" id="bathrooms" name="bathrooms" required min="0" max="10" step="1" value="1"
                  aria-describedby="bathrooms-error" />
           <p class="field-error" id="bathrooms-error" role="alert" hidden></p>
         </div>
         <div class="field">
-          <label for="total_area">Superficie total (m²)</label>
+          <label for="total_area">
+            Superficie total (m²)
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
           <input type="number" id="total_area" name="total_area" required min="1" max="10000" step="0.1" value="60"
-                 aria-describedby="total_area-error" />
+                 aria-describedby="total_area-hint total_area-error" />
+          <p class="field-hint" id="total_area-hint">
+            Incluí patio, terraza y balcones si los hay.
+          </p>
           <p class="field-error" id="total_area-error" role="alert" hidden></p>
         </div>
         <div class="field">
-          <label for="covered_area">Superficie cubierta (m²)</label>
+          <label for="covered_area">
+            Superficie cubierta (m²)
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
           <input type="number" id="covered_area" name="covered_area" required min="1" max="10000" step="0.1" value="55"
-                 aria-describedby="covered_area-error" />
+                 aria-describedby="covered_area-hint covered_area-error" />
+          <p class="field-hint" id="covered_area-hint">
+            Solo lo edificado. Debe ser menor o igual a la superficie total.
+          </p>
           <p class="field-error" id="covered_area-error" role="alert" hidden></p>
         </div>
         <div class="field">
-          <label for="latitude">Latitud</label>
+          <label for="latitude">
+            Latitud
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
           <input type="number" id="latitude" name="latitude" required min="-90" max="90" step="0.00001" value="-34.9"
                  aria-describedby="latitude-error" />
           <p class="field-error" id="latitude-error" role="alert" hidden></p>
         </div>
         <div class="field">
-          <label for="longitude">Longitud</label>
+          <label for="longitude">
+            Longitud
+            <span class="required-mark" aria-hidden="true">*</span>
+            <span class="visually-hidden">obligatorio</span>
+          </label>
           <input type="number" id="longitude" name="longitude" required min="-180" max="180" step="0.00001" value="-56.2"
                  aria-describedby="longitude-error" />
           <p class="field-error" id="longitude-error" role="alert" hidden></p>
         </div>
         <div class="field field-full">
-          <label for="price">Precio publicado (opcional, para comparar)</label>
+          <label for="price">
+            Precio publicado (opcional)
+          </label>
           <input type="number" id="price" name="price" min="0" step="1"
-                 placeholder="Dejar vacío si no hay referencia" aria-describedby="price-hint price-error" />
+                 placeholder="Dejar vacío si no querés comparar"
+                 aria-describedby="price-hint price-error" />
           <p class="field-hint" id="price-hint">
-            Si dejás este campo vacío, enviaremos un valor mínimo al modelo y ocultaremos la comparación —
-            el endpoint requiere <code>price</code> por contrato.
+            Si lo completás, la sección de comparación te dice si el valor publicado está por encima o
+            por debajo de nuestra estimación. Si lo dejás vacío, enviamos <code>1</code> al backend
+            (el endpoint exige el campo por contrato) y ocultamos la comparación.
           </p>
           <p class="field-error" id="price-error" role="alert" hidden></p>
         </div>
@@ -95,15 +182,15 @@
             <span class="btn-label">Calcular precio</span>
             <span class="btn-spinner" aria-hidden="true"></span>
           </button>
-          <button type="reset" class="btn btn-ghost" id="reset-btn">Limpiar</button>
+          <button type="reset" class="btn btn-ghost" id="reset-btn">Limpiar formulario</button>
           <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
         </div>
       </form>
     </section>
 
-    <section class="card result-card" id="result-card" hidden aria-live="polite">
+    <section class="card result-card" id="result-card" hidden aria-labelledby="result-title" aria-live="polite">
       <div class="result-header">
-        <h2>Resultado</h2>
+        <h2 id="result-title">Estimación</h2>
         <div class="result-actions">
           <button type="button" class="btn btn-ghost btn-small" id="copy-result-btn">
             Copiar resultado
@@ -113,20 +200,44 @@
           </span>
         </div>
       </div>
+      <p class="result-disclaimer">
+        Esta cifra es una <strong>estimación</strong> generada por un modelo estadístico —
+        puede diferir del precio final del mercado.
+      </p>
       <div class="result-grid">
         <div class="result-main">
-          <span class="result-label">Precio estimado</span>
+          <span class="result-label">Precio estimado mensual</span>
           <span class="result-value" id="result-price">—</span>
           <span class="result-currency" id="result-currency">USD</span>
         </div>
-        <dl class="kv-list">
-          <div><dt>Modelo</dt><dd id="result-model">—</dd></div>
-          <div><dt>Versión</dt><dd id="result-version">—</dd></div>
-          <div><dt>Timestamp</dt><dd id="result-timestamp" class="mono">—</dd></div>
+        <dl class="kv-list result-meta">
+          <div>
+            <dt>Modelo</dt>
+            <dd id="result-model">—</dd>
+          </div>
+          <div>
+            <dt>Versión</dt>
+            <dd id="result-version">—</dd>
+          </div>
+          <div>
+            <dt>Generado el</dt>
+            <dd id="result-timestamp" class="mono">—</dd>
+          </div>
         </dl>
       </div>
-      <div class="comparison" id="comparison" hidden>
-        <h3>Comparación con tu precio publicado</h3>
+      <div class="comparison" id="comparison" hidden aria-labelledby="comparison-title">
+        <h3 id="comparison-title">Comparación con tu precio publicado</h3>
+        <div class="comparison-headline">
+          <div class="comparison-primary">
+            <span class="comparison-label">Publicado</span>
+            <span class="comparison-value comparison-value-published" id="comparison-published">—</span>
+          </div>
+          <div class="comparison-versus" aria-hidden="true">vs.</div>
+          <div class="comparison-primary">
+            <span class="comparison-label">Estimado</span>
+            <span class="comparison-value comparison-value-estimated" id="comparison-estimated">—</span>
+          </div>
+        </div>
         <div class="comparison-summary">
           <span class="badge" id="comparison-badge" data-state="neutral">—</span>
           <p class="comparison-interpretation" id="comparison-interpretation">—</p>
@@ -145,17 +256,33 @@
           </div>
         </div>
         <dl class="kv-list comparison-kv">
-          <div><dt>Precio publicado</dt><dd id="comparison-published">—</dd></div>
-          <div><dt>Precio estimado</dt><dd id="comparison-estimated">—</dd></div>
-          <div><dt>Diferencia</dt><dd id="diff-absolute">—</dd></div>
-          <div><dt>Diferencia %</dt><dd id="diff-percent">—</dd></div>
+          <div>
+            <dt>Diferencia</dt>
+            <dd id="diff-absolute">—</dd>
+          </div>
+          <div>
+            <dt>Diferencia %</dt>
+            <dd id="diff-percent">—</dd>
+          </div>
         </dl>
       </div>
+      <p
+        class="comparison-empty"
+        id="comparison-empty"
+        hidden
+      >
+        Para ver la comparación con el precio publicado, volvé al formulario y completá el campo
+        <strong>Precio publicado</strong>.
+      </p>
     </section>
 
-    <section class="card error-card" id="error-card" hidden role="alert" aria-live="assertive">
-      <h2>No pudimos calcular el precio</h2>
+    <section class="card error-card" id="error-card" hidden role="alert" aria-live="assertive" aria-labelledby="error-title">
+      <div class="error-header">
+        <span class="error-kind" id="error-kind" data-kind="unknown">Error</span>
+        <h2 id="error-title">No pudimos calcular el precio</h2>
+      </div>
       <p id="error-message">—</p>
+      <p class="error-guidance" id="error-guidance" hidden></p>
       <div class="error-actions">
         <button type="button" class="btn btn-primary btn-small" id="retry-btn">Reintentar</button>
         <button type="button" class="btn btn-ghost btn-small" id="error-dismiss">Cerrar</button>
@@ -163,17 +290,17 @@
     </section>
   </div>
 
-  <aside class="layout-sidebar" id="history-panel" aria-label="Historial de predicciones">
+  <aside class="layout-sidebar" id="history-panel" aria-label="Historial de predicciones recientes">
     <div class="card history-card">
       <div class="history-header">
-        <h2>Historial</h2>
+        <h2>Historial reciente</h2>
         <button type="button" class="btn btn-ghost btn-small" id="history-clear-btn" hidden>
-          Limpiar historial
+          Vaciar
         </button>
       </div>
       <p class="history-empty" id="history-empty">
-        Todavía no calculaste ningún precio. Cuando lo hagas, vas a ver acá las últimas
-        <strong>10</strong> predicciones — solo en tu navegador.
+        Cuando calcules tu primera estimación, la vas a ver acá. Guardamos hasta
+        <strong>10 predicciones</strong>, solo en este navegador — nada se envía al servidor.
       </p>
       <ol class="history-list" id="history-list" aria-live="polite"></ol>
     </div>
