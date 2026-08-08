@@ -11,7 +11,36 @@ Docker image, release script, docs) resolves back to it.
 
 ## [Unreleased]
 
-_No changes yet._
+### Added — Fase 11 (web UI)
+
+- Server-rendered home page at `GET /` (Jinja2 templates, no
+  framework CDN). Includes project title, description, "Calcular
+  precio" CTA, model info card (populated from `/version`), API
+  version badge and repository link.
+- HTML form with `neighborhood`, `property_type`, `bedrooms`,
+  `bathrooms`, `total_area`, `covered_area`, `latitude`, `longitude`
+  and an optional `price` field for comparison. Native HTML
+  validation on every model-feature field.
+- Vanilla-JS front-end (`/static/js/app.js`) that posts the form via
+  `fetch()` to the existing `POST /predict`, renders the estimated
+  price + model + version + timestamp, and — when the user provides
+  a published price — shows the absolute / percent difference with a
+  🟢 / 🟡 / 🔴 semaphore badge.
+- Live header status indicator that polls `/health` + `/ready` every
+  30 seconds and shows ● Online / ● Inicializando / ● Error.
+- Friendly error handling that translates HTTP 0 / 408 / 422 / 503 /
+  5xx into user-facing messages; tracebacks are never surfaced.
+- Custom responsive CSS (`/static/css/styles.css`), simple palette,
+  card layout, soft shadows, single-column breakpoint on narrow
+  viewports. No Bootstrap / Tailwind / other framework.
+- SVG favicon served from `/static/favicon.svg`.
+- `StaticFiles` mount at `/static` for CSS / JS / favicon; packaged
+  via `pyproject.toml` `package-data`.
+- 29 new tests in `tests/api/test_web_ui.py` covering the home
+  route, form fields, HTML validation, template inheritance, static
+  serving, CSS palette + responsive breakpoint, JS fetch calls and
+  semaphore states, `/predict`/`/version`/`/health`/`/ready`
+  contract preservation, and OpenAPI hygiene.
 
 ## [0.10.0] — 2026-08-07
 
