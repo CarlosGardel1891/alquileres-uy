@@ -11,6 +11,36 @@ Docker image, release script, docs) resolves back to it.
 
 ## [Unreleased]
 
+### Added — Fase 14 (project finalization)
+
+- Portfolio-grade `README.md` reescrito de cero: problema, objetivo,
+  arquitectura, stack, capturas (placeholders), quick start, Docker,
+  Docker Compose (referencia), tabla de variables, entrenamiento,
+  API, frontend, observabilidad, testing, CI, release, roadmap,
+  licencia. Badges de Python, FastAPI, Docker, CI, License y
+  Version en el encabezado.
+- `docs/architecture.md` — visión general, flujo de datos, ETL,
+  entrenamiento, serving, frontend y observabilidad con 6 diagramas
+  Mermaid.
+- `docs/api.md` — contratos completos de `/health`, `/ready`,
+  `/version`, `/build`, `/metrics` y `POST /predict` con ejemplos
+  request / response, códigos de error y envelope común.
+- `docs/portfolio.md` — narrativa para entrevistas: problema,
+  decisiones técnicas, desafíos, aprendizajes, arquitectura,
+  métricas del proyecto y stack.
+- `docs/demo.md` — guión para grabar el video demo (1 / 3–5 / 8–10
+  minutos), checklist de publicación.
+- `docs/project-tree.md` — snapshot del árbol del repositorio
+  generado por `scripts/generate_project_tree.py` (stdlib-only,
+  excluye `__pycache__`, `.venv`, `.git`, `data`, `artifacts`,
+  build caches, `prompt.txt`).
+- `CONTRIBUTING.md` — cómo levantar el proyecto, convención de
+  ramas / commits / PRs, flujo de tests, guía de estilo.
+- `LICENSE` — MIT License a nombre de Martin Castaldi.
+- 31 tests nuevos en `tests/test_docs.py` que validan la presencia
+  y el contenido mínimo de todos los archivos anteriores + que el
+  script de generación del tree corre limpio.
+
 ### Added — Fase 13 (web UI polish)
 
 - Clearer form state: explicit `*` required marks in every label
