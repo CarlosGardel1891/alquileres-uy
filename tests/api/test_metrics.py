@@ -253,12 +253,14 @@ def test_predict_hit_increments_requests_and_latency(api_env, clean_metrics):
 
 
 def test_predict_failure_increments_errors_counter(api_env, monkeypatch, clean_metrics):
-    from alquileres_uy.api.services.predictor import Predictor, PredictorError
+    from alquileres_uy.api.prediction_service import PredictionService
+    from alquileres_uy.api.services.predictor import PredictorError
 
-    def _explode(self, request):
+    async def _explode(self, request):
         raise PredictorError("boom")
 
-    monkeypatch.setattr(Predictor, "predict", _explode, raising=True)
+    # Patch the SERVICE (not raw Predictor) so startup warmup still succeeds.
+    monkeypatch.setattr(PredictionService, "predict", _explode, raising=True)
     app = create_app()
     response = _run(
         _asgi_call(

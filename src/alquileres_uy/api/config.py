@@ -40,6 +40,19 @@ class ApiSettings(BaseSettings):
     ENABLE_METRICS: bool = True
     METRICS_PATH: str = "/metrics"
 
+    # Runtime reliability knobs.
+    #
+    # ``MAX_CONCURRENT_PREDICTIONS`` caps the number of in-flight
+    # predictions via an asyncio semaphore. Requests over the cap wait
+    # (they are never rejected) so the model process cannot be
+    # oversubscribed.
+    #
+    # ``PREDICT_TIMEOUT`` (seconds) bounds each individual prediction.
+    # When exceeded, the request is cancelled and the client receives
+    # HTTP 503 with a ``prediction_timeout`` error code.
+    MAX_CONCURRENT_PREDICTIONS: int = 4
+    PREDICT_TIMEOUT: float = 5.0
+
     model_config = SettingsConfigDict(
         env_prefix="ALQUILERES_API_",
         env_file=None,
