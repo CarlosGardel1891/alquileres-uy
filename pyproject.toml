@@ -51,7 +51,14 @@ where = ["src"]
 version = { attr = "alquileres_uy._version.__version__" }
 
 [tool.setuptools.package-data]
-alquileres_uy = ["build_info.json"]
+alquileres_uy = [
+    "build_info.json",
+    "api/templates/*.html",
+    "api/static/css/*.css",
+    "api/static/js/*.js",
+    "api/static/*.svg",
+    "api/static/*.ico",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
