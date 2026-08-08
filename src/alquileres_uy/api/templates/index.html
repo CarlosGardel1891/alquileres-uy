@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}{{ app_name }} — estimador de precios{% endblock %}
+
+{% block content %}
+<section class="card hero-card">
+  <h2>Estimador de alquileres para Montevideo</h2>
+  <p class="lead">
+    Completá los datos de la propiedad y obtené una estimación del precio de alquiler mensual
+    basada en el modelo entrenado sobre publicaciones de MercadoLibre Uruguay.
+  </p>
+  <a href="#form-card" class="btn btn-primary hero-cta">Calcular precio</a>
+  <div class="model-info" id="model-info" aria-live="polite">
+    <h3>Modelo en producción</h3>
+    <dl class="kv-list">
+      <div><dt>Modelo</dt><dd data-field="model_type">—</dd></div>
+      <div><dt>Versión</dt><dd data-field="model_version">—</dd></div>
+      <div><dt>Entrenado</dt><dd data-field="trained_at">—</dd></div>
+      <div><dt>Bundle SHA</dt><dd data-field="bundle_sha256" class="mono">—</dd></div>
+      <div><dt>API</dt><dd data-field="api_version">{{ app_version }}</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="card form-card" id="form-card">
+  <h2>Datos de la propiedad</h2>
+  <form id="predict-form" class="form-grid" novalidate>
+    <div class="field">
+      <label for="neighborhood">Barrio</label>
+      <input type="text" id="neighborhood" name="neighborhood"
+             required minlength="1" maxlength="80" autocomplete="off"
+             placeholder="p. ej. Pocitos" />
+    </div>
+    <div class="field">
+      <label for="property_type">Tipo</label>
+      <select id="property_type" name="property_type" required>
+        <option value="apartment">Apartamento</option>
+        <option value="house">Casa</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="bedrooms">Dormitorios</label>
+      <input type="number" id="bedrooms" name="bedrooms" required min="0" max="20" step="1" value="2" />
+    </div>
+    <div class="field">
+      <label for="bathrooms">Baños</label>
+      <input type="number" id="bathrooms" name="bathrooms" required min="0" max="10" step="1" value="1" />
+    </div>
+    <div class="field">
+      <label for="total_area">Superficie total (m²)</label>
+      <input type="number" id="total_area" name="total_area" required min="1" max="10000" step="0.1" value="60" />
+    </div>
+    <div class="field">
+      <label for="covered_area">Superficie cubierta (m²)</label>
+      <input type="number" id="covered_area" name="covered_area" required min="1" max="10000" step="0.1" value="55" />
+    </div>
+    <div class="field">
+      <label for="latitude">Latitud</label>
+      <input type="number" id="latitude" name="latitude" required min="-90" max="90" step="0.00001" value="-34.9" />
+    </div>
+    <div class="field">
+      <label for="longitude">Longitud</label>
+      <input type="number" id="longitude" name="longitude" required min="-180" max="180" step="0.00001" value="-56.2" />
+    </div>
+    <div class="field field-full">
+      <label for="price">Precio publicado (opcional, para comparar)</label>
+      <input type="number" id="price" name="price" min="0" step="1"
+             placeholder="Dejar vacío si no hay referencia" />
+      <p class="field-hint">
+        Si dejás este campo vacío, enviaremos un valor mínimo al modelo y ocultaremos la comparación —
+        el endpoint requiere <code>price</code> por contrato.
+      </p>
+    </div>
+    <div class="field field-full form-actions">
+      <button type="submit" class="btn btn-primary" id="submit-btn">Calcular precio</button>
+      <button type="reset" class="btn btn-ghost">Limpiar</button>
+    </div>
+  </form>
+</section>
+
+<section class="card result-card" id="result-card" hidden aria-live="polite">
+  <h2>Resultado</h2>
+  <div class="result-grid">
+    <div class="result-main">
+      <span class="result-label">Precio estimado</span>
+      <span class="result-value" id="result-price">—</span>
+      <span class="result-currency" id="result-currency">USD</span>
+    </div>
+    <dl class="kv-list">
+      <div><dt>Modelo</dt><dd id="result-model">—</dd></div>
+      <div><dt>Versión</dt><dd id="result-version">—</dd></div>
+      <div><dt>Timestamp</dt><dd id="result-timestamp" class="mono">—</dd></div>
+    </dl>
+  </div>
+  <div class="comparison" id="comparison" hidden>
+    <h3>Comparación con tu precio publicado</h3>
+    <div class="comparison-row">
+      <span class="badge" id="comparison-badge" data-state="neutral">—</span>
+      <div>
+        <div><strong>Diferencia:</strong> <span id="diff-absolute">—</span></div>
+        <div><strong>Diferencia %:</strong> <span id="diff-percent">—</span></div>
+      </div>
+    </div>
+    <p class="comparison-note" id="comparison-note"></p>
+  </div>
+</section>
+
+<section class="card error-card" id="error-card" hidden role="alert" aria-live="assertive">
+  <h2>No pudimos calcular el precio</h2>
+  <p id="error-message">—</p>
+  <button type="button" class="btn btn-ghost" id="error-dismiss">Cerrar</button>
+</section>
+{% endblock %}

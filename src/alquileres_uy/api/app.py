@@ -10,6 +10,7 @@ beyond :class:`ApiSettings`.
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -21,7 +22,7 @@ from .logging_config import REQUEST_ID_HEADER, configure_logging, get_logger
 from .metrics import render_latest
 from .middleware import MetricsMiddleware, RequestIdMiddleware
 from .prediction_service import PredictionTimeoutError
-from .routes import build, health, model_info, predict, ready, version
+from .routes import build, health, model_info, predict, ready, version, web
 
 
 def _register_prediction_timeout_handler(app: FastAPI) -> None:
@@ -83,6 +84,15 @@ def create_app() -> FastAPI:
     app.include_router(predict.router)
     app.include_router(ready.router)
     app.include_router(version.router)
+    app.include_router(web.router)
+    # Web UI static assets (Fase 11). The directory is bundled with the
+    # package so a wheel / Docker image serves them without extra steps.
+    if web.STATIC_DIR.is_dir():
+        app.mount(
+            "/static",
+            StaticFiles(directory=str(web.STATIC_DIR)),
+            name="static",
+        )
     if settings.ENABLE_METRICS:
 
         async def _metrics_endpoint() -> Response:
