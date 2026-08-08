@@ -1,0 +1,127 @@
+name: Release
+
+# Fires when an operator pushes an annotated ``v<semver>`` tag. Builds
+# the wheel + sdist + Docker image, attaches everything as GitHub
+# release assets and creates the GitHub Release from the CHANGELOG
+# section. Does NOT push the image to any registry — Fase 10 is
+# release-preparation only, not publication.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-artifacts:
+    name: Build wheel + sdist + Docker + Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Version consistency check
+        run: |
+          PKG_VERSION="$(PYTHONPATH=src python -c 'from alquileres_uy._version import __version__; print(__version__)')"
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          echo "package=${PKG_VERSION} tag=${TAG_VERSION}"
+          if [ "${PKG_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::tag ${TAG_VERSION} does not match _version.__version__ ${PKG_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Generate build_info.json
+        run: python scripts/generate_build_info.py --print
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          python - <<'PY' > release_notes.md
+          import pathlib, re, sys
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          version = "${{ steps.version.outputs.version }}"
+          pattern = re.compile(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              re.DOTALL | re.MULTILINE,
+          )
+          m = pattern.search(text)
+          if not m:
+              sys.stderr.write(f"no CHANGELOG entry for {version}\n")
+              sys.exit(1)
+          print(m.group(1).strip())
+          PY
+          echo "path=release_notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare empty serving-bundle placeholder
+        run: |
+          mkdir -p artifacts/models/.placeholder
+          echo "release image — mount your bundle at deploy time" \
+            > artifacts/models/.placeholder/README.txt
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: alquileres-uy-api:${{ steps.version.outputs.version }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+          outputs: type=docker,dest=alquileres-uy-api-${{ steps.version.outputs.version }}.tar
+
+      - name: Verify OCI labels on built image
+        run: |
+          docker load -i alquileres-uy-api-${{ steps.version.outputs.version }}.tar
+          docker inspect alquileres-uy-api:${{ steps.version.outputs.version }} \
+            --format '{{json .Config.Labels}}'
+
+      - name: Upload wheel + sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/*
+
+      - name: Upload Docker image tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: alquileres-uy-api-${{ steps.version.outputs.version }}.tar
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body_path: release_notes.md
+          draft: true
+          files: |
+            dist/*
+            alquileres-uy-api-${{ steps.version.outputs.version }}.tar
