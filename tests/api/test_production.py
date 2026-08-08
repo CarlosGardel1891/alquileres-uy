@@ -451,12 +451,14 @@ def test_predict_logs_safe_fields_only(api_env, project_caplog):
 
 
 def test_predict_failure_logs_error_line(api_env, monkeypatch, project_caplog):
-    from alquileres_uy.api.services.predictor import Predictor, PredictorError
+    from alquileres_uy.api.prediction_service import PredictionService
+    from alquileres_uy.api.services.predictor import PredictorError
 
-    def _raise(self, request):
+    async def _raise(self, request):
         raise PredictorError("boom")
 
-    monkeypatch.setattr(Predictor, "predict", _raise, raising=True)
+    # Patch the SERVICE so startup warmup still succeeds through the raw Predictor.
+    monkeypatch.setattr(PredictionService, "predict", _raise, raising=True)
     app = create_app()
     response = _run(
         _asgi_call(

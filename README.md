@@ -371,6 +371,20 @@ Endpoints:
 - `GET /model-info` → HTTP `501 Not Implemented` (contrato reservado).
 - `POST /predict` → recibe un payload con los campos `property_type`, `price`, `bedrooms`, `bathrooms`, `covered_area`, `total_area`, `latitude`, `longitude`, `neighborhood` y devuelve `{prediction, currency, model_version, prediction_timestamp}`. La API carga el serving bundle al startup — sin bundle válido no arranca.
 
+**Runtime reliability (Fase 9)**:
+
+- **Warmup automático** al startup: una predicción sintética a través del `Predictor` prime numpy/sklearn/lightgbm. Sin intervenir Prometheus (no incrementa `prediction_requests_total`). Un warmup fallido levanta `WarmupError` y aborta el startup.
+- **`PredictionService`** envuelve al `Predictor`:
+  - Semáforo `asyncio.Semaphore(MAX_CONCURRENT_PREDICTIONS)` — los requests que exceden esperan, nunca se rechazan.
+  - Timeout `asyncio.timeout(PREDICT_TIMEOUT)` — inferencias que exceden reciben HTTP 503 con `{"error":{"code":"prediction_timeout","message":"Prediction timed out."}}` y bump de `prediction_errors_total`.
+  - Predicción real corre en `asyncio.to_thread` para no bloquear el event loop.
+  - Graceful shutdown: `begin_shutdown()` rechaza nuevos requests (503 `service_unavailable`), `wait_for_drain()` espera in-flight sin cancelarlos.
+- **`minimum_api_version`** en el bundle: durante startup se compara contra `APP_VERSION`; un bundle que exige versión mayor rompe el startup con `IncompatibleBundleError`.
+- **Config nueva**: `ALQUILERES_API_MAX_CONCURRENT_PREDICTIONS` (default 4), `ALQUILERES_API_PREDICT_TIMEOUT` (default 5.0s).
+- **Scripts operacionales** (stdlib-only):
+  - `scripts/benchmark.py --url ... --requests N --concurrency M` → stats (total, throughput, p50/p95/p99, min/max, errors).
+  - `scripts/smoke_api.py --url ...` → chequea `/health`, `/ready`, `/version`, `/metrics`, `/predict`; exit 0/1.
+
 **Observabilidad (Fase 8)**:
 
 - `GET /metrics` (default) — exposición Prometheus con:
